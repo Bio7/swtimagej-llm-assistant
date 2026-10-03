@@ -10,6 +10,10 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Release tag to create (e.g. v2.4.1)'
+        required: true
 
 permissions:
   contents: write
@@ -53,5 +57,6 @@ jobs:
     - name: Publish GitHub Release
       uses: softprops/action-gh-release@v2
       with:
+        tag_name: ${{ github.event_name == 'workflow_dispatch' && inputs.tag_name || github.ref_name }}
         files: swtimagej-llm-assistant/swtimagej-llm-assistant/target/LLM_Assistant.jar
         generate_release_notes: true
