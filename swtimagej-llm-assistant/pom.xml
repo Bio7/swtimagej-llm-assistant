@@ -1,0 +1,242 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+	<modelVersion>4.0.0</modelVersion>
+
+	<groupId>org.swtimagej.plugins</groupId>
+	<artifactId>swtimagej-llm-assistant</artifactId>
+	<version>2.4.1</version>
+	<packaging>jar</packaging>
+
+	<name>SWTImageJ LLM Assistant</name>
+	<description>SWTImageJ plugin connecting SWTImageJ to OpenAI-compatible large language models
+		(chat, tools for images/editor/Script Explorer, Java, markers and quick fixes, reference documents).</description>
+
+	<licenses>
+		<license>
+			<name>Apache License, Version 2.0</name>
+			<url>https://www.apache.org/licenses/LICENSE-2.0.txt</url>
+			<distribution>repo</distribution>
+		</license>
+	</licenses>
+
+	<properties>
+		<!-- SWTImageJ requires Java 25 (Bundle-RequiredExecutionEnvironment: JavaSE-25).
+		     The sources use unnamed lambda parameters "_" (Java 22+), so 22 is the minimum. -->
+		<java.release>25</java.release>
+		<maven.compiler.release>${java.release}</maven.compiler.release>
+		<project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+
+		<!-- The SWTImageJ bundle jar (contains the ij.* classes). Copy it to lib/ (see BUILDING.md)
+		     or pass its location: -Dswtimagej.jar=/path/to/org.eclipse.swt.imagej_x.y.z.jar -->
+		<swtimagej.jar>${project.basedir}/lib/org.eclipse.swt.imagej.jar</swtimagej.jar>
+
+		<!-- SWT from Maven Central, only needed for compiling (SWTImageJ provides it at runtime).
+		     The platform artifact is chosen by the OS profiles below. -->
+		<swt.version>3.131.0</swt.version>
+		<swt.artifact>org.eclipse.swt.gtk.linux.x86_64</swt.artifact>
+	</properties>
+
+	<dependencies>
+		<!-- SWTImageJ: not on Maven Central, therefore referenced as a local jar.
+		     'provided' semantics: the classes are on the compile class path only and are
+		     not packaged - SWTImageJ supplies them when the plugin runs. -->
+		<dependency>
+			<groupId>org.eclipse.swt.imagej</groupId>
+			<artifactId>org.eclipse.swt.imagej</artifactId>
+			<version>local</version>
+			<scope>system</scope>
+			<systemPath>${swtimagej.jar}</systemPath>
+		</dependency>
+
+		<dependency>
+			<groupId>org.eclipse.platform</groupId>
+			<artifactId>${swt.artifact}</artifactId>
+			<version>${swt.version}</version>
+			<scope>provided</scope>
+		</dependency>
+
+		<!-- If the compiler reports "class file for org.eclipse.xyz.Abc not found", copy the bundle jar
+		     named in the message from the SWTImageJ installation's plugins folder into lib/ and add it
+		     like SWTImageJ above, e.g.:
+		<dependency>
+			<groupId>local</groupId>
+			<artifactId>org.eclipse.jface.text</artifactId>
+			<version>local</version>
+			<scope>system</scope>
+			<systemPath>${project.basedir}/lib/org.eclipse.jface.text.jar</systemPath>
+		</dependency>
+		-->
+	</dependencies>
+
+	<build>
+		<!-- ImageJ only loads plugin jars whose name contains an underscore -->
+		<finalName>LLM_Assistant</finalName>
+
+		<resources>
+			<resource>
+				<directory>src/main/resources</directory>
+			</resource>
+			<resource>
+				<directory>${project.basedir}</directory>
+				<targetPath>META-INF</targetPath>
+				<includes>
+					<include>LICENSE</include>
+				</includes>
+			</resource>
+		</resources>
+
+		<plugins>
+			<!-- clear message instead of a cryptic compiler error when the SWTImageJ jar is missing -->
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-enforcer-plugin</artifactId>
+				<version>3.5.0</version>
+				<executions>
+					<execution>
+						<id>check-swtimagej-jar</id>
+						<phase>validate</phase>
+						<goals>
+							<goal>enforce</goal>
+						</goals>
+						<configuration>
+							<rules>
+								<requireFilesExist>
+									<files>
+										<file>${swtimagej.jar}</file>
+									</files>
+									<message>
+The SWTImageJ jar was not found at ${swtimagej.jar}.
+Copy org.eclipse.swt.imagej_*.jar from your SWTImageJ installation (folder 'plugins')
+to lib/org.eclipse.swt.imagej.jar, or build with -Dswtimagej.jar=/path/to/the.jar
+(Eclipse: Run As > Maven build... > Parameter swtimagej.jar). See BUILDING.md.
+									</message>
+								</requireFilesExist>
+								<requireJavaVersion>
+									<version>[${java.release},)</version>
+									<message>Building needs a JDK ${java.release} or newer (SWTImageJ runs on Java ${java.release}).</message>
+								</requireJavaVersion>
+							</rules>
+						</configuration>
+					</execution>
+				</executions>
+			</plugin>
+
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-compiler-plugin</artifactId>
+				<version>3.13.0</version>
+				<configuration>
+					<release>${java.release}</release>
+					<compilerArgs>
+						<arg>-Xlint:all,-serial,-processing,-options</arg>
+					</compilerArgs>
+				</configuration>
+			</plugin>
+
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-resources-plugin</artifactId>
+				<version>3.3.1</version>
+			</plugin>
+
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-jar-plugin</artifactId>
+				<version>3.4.2</version>
+				<configuration>
+					<archive>
+						<manifestEntries>
+							<Implementation-Title>${project.name}</Implementation-Title>
+							<Implementation-Version>${project.version}</Implementation-Version>
+							<Bundle-License>Apache-2.0</Bundle-License>
+						</manifestEntries>
+					</archive>
+				</configuration>
+			</plugin>
+		</plugins>
+	</build>
+
+	<profiles>
+		<!-- SWT platform artifact for compiling, selected automatically -->
+		<profile>
+			<id>swt-linux-x86_64</id>
+			<activation>
+				<os><family>unix</family><name>Linux</name><arch>amd64</arch></os>
+			</activation>
+			<properties><swt.artifact>org.eclipse.swt.gtk.linux.x86_64</swt.artifact></properties>
+		</profile>
+		<profile>
+			<id>swt-linux-aarch64</id>
+			<activation>
+				<os><family>unix</family><name>Linux</name><arch>aarch64</arch></os>
+			</activation>
+			<properties><swt.artifact>org.eclipse.swt.gtk.linux.aarch64</swt.artifact></properties>
+		</profile>
+		<profile>
+			<id>swt-windows-x86_64</id>
+			<activation>
+				<os><family>windows</family><arch>amd64</arch></os>
+			</activation>
+			<properties><swt.artifact>org.eclipse.swt.win32.win32.x86_64</swt.artifact></properties>
+		</profile>
+		<profile>
+			<id>swt-windows-aarch64</id>
+			<activation>
+				<os><family>windows</family><arch>aarch64</arch></os>
+			</activation>
+			<properties><swt.artifact>org.eclipse.swt.win32.win32.aarch64</swt.artifact></properties>
+		</profile>
+		<profile>
+			<id>swt-macos-aarch64</id>
+			<activation>
+				<os><family>mac</family><arch>aarch64</arch></os>
+			</activation>
+			<properties><swt.artifact>org.eclipse.swt.cocoa.macosx.aarch64</swt.artifact></properties>
+		</profile>
+		<profile>
+			<id>swt-macos-x86_64</id>
+			<activation>
+				<os><family>mac</family><arch>x86_64</arch></os>
+			</activation>
+			<properties><swt.artifact>org.eclipse.swt.cocoa.macosx.x86_64</swt.artifact></properties>
+		</profile>
+
+		<!-- Optional: copy the built jar into the SWTImageJ plugins folder.
+		     Activated by setting the property, e.g.
+		     mvn package -Dswtimagej.plugins=/opt/SWTImageJ/plugins
+		     (restart SWTImageJ afterwards). -->
+		<profile>
+			<id>install-into-swtimagej</id>
+			<activation>
+				<property><name>swtimagej.plugins</name></property>
+			</activation>
+			<build>
+				<plugins>
+					<plugin>
+						<groupId>org.apache.maven.plugins</groupId>
+						<artifactId>maven-antrun-plugin</artifactId>
+						<version>3.1.0</version>
+						<executions>
+							<execution>
+								<id>copy-to-swtimagej</id>
+								<phase>package</phase>
+								<goals>
+									<goal>run</goal>
+								</goals>
+								<configuration>
+									<target>
+										<copy file="${project.build.directory}/${project.build.finalName}.jar"
+											todir="${swtimagej.plugins}" overwrite="true" />
+										<echo message="Installed ${project.build.finalName}.jar into ${swtimagej.plugins} - restart SWTImageJ." />
+									</target>
+								</configuration>
+							</execution>
+						</executions>
+					</plugin>
+				</plugins>
+			</build>
+		</profile>
+	</profiles>
+</project>
