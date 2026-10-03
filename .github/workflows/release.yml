@@ -41,8 +41,8 @@ jobs:
     - name: Copy the bundle jar into lib/
       run: |
         mkdir -p swtimagej-llm-assistant/swtimagej-llm-assistant/lib
-        cp SWTImageJ/org.eclipse.swt.imagej/target/org.eclipse.swt.imagej-*.jar \
-          swtimagej-llm-assistant/swtimagej-llm-assistant/lib/org.eclipse.swt.imagej.jar
+        jar_file=$(find SWTImageJ/org.eclipse.swt.imagej/target -maxdepth 1 -name 'org.eclipse.swt.imagej-*.jar' ! -name '*-sources.jar')
+        cp "$jar_file" swtimagej-llm-assistant/swtimagej-llm-assistant/lib/org.eclipse.swt.imagej.jar
 
     - name: Build the plugin
       env:
