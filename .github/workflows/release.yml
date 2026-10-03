@@ -1,0 +1,57 @@
+# Builds the SWTImageJ bundle jar from the eclipse-swtimagej/SWTImageJ repo (needed to
+# compile against, per BUILDING.md), then builds this plugin and publishes
+# target/LLM_Assistant.jar as a GitHub Release asset. Triggered by pushing a tag like
+# "v2.4.1", or manually via workflow_dispatch - creates the release automatically if it
+# doesn't already exist for that tag.
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    container:
+      image: maven:3.10-eclipse-temurin-25
+
+    steps:
+    - name: Checkout LLM Assistant
+      uses: actions/checkout@v7
+      with:
+        path: swtimagej-llm-assistant
+
+    - name: Checkout SWTImageJ
+      uses: actions/checkout@v7
+      with:
+        repository: eclipse-swtimagej/SWTImageJ
+        path: SWTImageJ
+
+    - name: Build the SWTImageJ bundle jar
+      env:
+        MAVEN_ARGS: "--batch-mode --no-transfer-progress -Dstyle.color=always"
+      working-directory: SWTImageJ
+      run: mvn package -pl org.eclipse.swt.imagej
+
+    - name: Copy the bundle jar into lib/
+      run: |
+        mkdir -p swtimagej-llm-assistant/swtimagej-llm-assistant/lib
+        cp SWTImageJ/org.eclipse.swt.imagej/target/org.eclipse.swt.imagej-*.jar \
+          swtimagej-llm-assistant/swtimagej-llm-assistant/lib/org.eclipse.swt.imagej.jar
+
+    - name: Build the plugin
+      env:
+        MAVEN_ARGS: "--batch-mode --no-transfer-progress -Dstyle.color=always"
+      working-directory: swtimagej-llm-assistant/swtimagej-llm-assistant
+      run: mvn clean package
+
+    - name: Publish GitHub Release
+      uses: softprops/action-gh-release@v2
+      with:
+        files: swtimagej-llm-assistant/swtimagej-llm-assistant/target/LLM_Assistant.jar
+        generate_release_notes: true
