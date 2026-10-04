@@ -46,7 +46,6 @@ import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Listener;
 import org.eclipse.swt.widgets.Menu;
 import org.eclipse.swt.widgets.MenuItem;
-import org.eclipse.swt.widgets.MessageBox;
 import org.eclipse.swt.widgets.Shell;
 import org.eclipse.swt.widgets.Text;
 
@@ -597,13 +596,65 @@ public class ChatWindow implements ImageJTools.Host {
 			shell.forceActive();
 			String before = busyIndicator.getPhase();
 			busyIndicator.setPhase("Waiting for your approval...");
-			MessageBox mb = new MessageBox(shell, SWT.ICON_QUESTION | SWT.YES | SWT.NO);
-			mb.setText(title);
-			mb.setMessage(message);
-			ok.set(mb.open() == SWT.YES);
+			ok.set(openConfirmDialog(title, message));
 			busyIndicator.setPhase(before);
 		});
 		return ok.get();
+	}
+
+	/**
+	 * A custom, size-capped confirm dialog instead of MessageBox. The message can include a
+	 * code preview up to 1200 characters (see ImageJTools.runWithApproval()), and a native
+	 * MessageBox sizes itself to fit the whole message with no limit - on a long preview that
+	 * can grow taller than the screen and push the Yes/No buttons out of reach entirely. Here
+	 * the preview scrolls inside a fixed-size area instead, and the buttons sit in their own
+	 * row below it, always reachable regardless of message length.
+	 */
+	private boolean openConfirmDialog(String title, String message) {
+		Shell dialog = new Shell(shell, SWT.DIALOG_TRIM | SWT.APPLICATION_MODAL | SWT.RESIZE);
+		dialog.setText(title);
+		GridLayout layout = new GridLayout(1, false);
+		layout.marginWidth = 12;
+		layout.marginHeight = 12;
+		layout.verticalSpacing = 10;
+		dialog.setLayout(layout);
+		Text body = new Text(dialog, SWT.MULTI | SWT.WRAP | SWT.READ_ONLY | SWT.V_SCROLL | SWT.BORDER);
+		body.setText(message);
+		body.setFont(monoFont);
+		org.eclipse.swt.graphics.Rectangle screen = display.getPrimaryMonitor().getClientArea();
+		GridData bodyData = new GridData(SWT.FILL, SWT.FILL, true, true);
+		bodyData.widthHint = Math.min(720, screen.width - 160);
+		bodyData.heightHint = Math.min(420, screen.height - 220);
+		body.setLayoutData(bodyData);
+		Composite buttons = new Composite(dialog, SWT.NONE);
+		buttons.setLayoutData(new GridData(SWT.RIGHT, SWT.CENTER, false, false));
+		buttons.setLayout(new GridLayout(2, true));
+		AtomicBoolean result = new AtomicBoolean(false);
+		Button yes = new Button(buttons, SWT.PUSH);
+		yes.setText("Yes");
+		yes.setLayoutData(new GridData(80, SWT.DEFAULT));
+		yes.addListener(SWT.Selection, e -> {
+			result.set(true);
+			dialog.dispose();
+		});
+		Button no = new Button(buttons, SWT.PUSH);
+		no.setText("No");
+		no.setLayoutData(new GridData(80, SWT.DEFAULT));
+		no.addListener(SWT.Selection, e -> {
+			result.set(false);
+			dialog.dispose();
+		});
+		dialog.setDefaultButton(yes);
+		dialog.pack();
+		org.eclipse.swt.graphics.Rectangle parentBounds = shell.getBounds();
+		org.eclipse.swt.graphics.Point size = dialog.getSize();
+		dialog.setLocation(parentBounds.x + (parentBounds.width - size.x) / 2, parentBounds.y + (parentBounds.height - size.y) / 2);
+		dialog.open();
+		while(!dialog.isDisposed()) {
+			if(!display.readAndDispatch())
+				display.sleep();
+		}
+		return result.get();
 	}
 
 	/* ================================================================== code blocks */
