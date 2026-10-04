@@ -585,6 +585,16 @@ public class ChatWindow implements ImageJTools.Host {
 		display.syncExec(() -> {
 			if(shell == null || shell.isDisposed())
 				return;
+			/*
+			 * A turn that e.g. adds an overlay and then plots intensities can trigger this
+			 * confirm() twice in a row. Without forcing the shell forward, a second prompt can
+			 * open behind the chat (or behind a window a previous tool call just created, like
+			 * the plot), leaving this background thread blocked in the syncExec above with no
+			 * visible sign beyond the easy-to-miss busyIndicator phase text - looking exactly
+			 * like a hang.
+			 */
+			shell.setMinimized(false);
+			shell.forceActive();
 			String before = busyIndicator.getPhase();
 			busyIndicator.setPhase("Waiting for your approval...");
 			MessageBox mb = new MessageBox(shell, SWT.ICON_QUESTION | SWT.YES | SWT.NO);
