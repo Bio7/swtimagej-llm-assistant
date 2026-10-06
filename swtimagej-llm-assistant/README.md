@@ -3,7 +3,9 @@
 SWTImageJ plugin that connects SWTImageJ to OpenAI-compatible language models
 (OpenAI, LM Studio, Ollama, …): chat window, SWTImageJ tools (images, editor,
 Script Explorer, macros, Java), error markers with quick fixes, image
-snapshots for vision models and reference documents (hybrid search).
+snapshots for vision models, reference documents (hybrid search), and optional
+direct source browsing/search of selected reference folders (e.g. an
+ImageJ/SWTImageJ source checkout).
 
 * **Build and Eclipse import:** see [BUILDING.md](BUILDING.md)
 * **Using the plugin:** see [docs/PLUGIN_README.md](docs/PLUGIN_README.md)

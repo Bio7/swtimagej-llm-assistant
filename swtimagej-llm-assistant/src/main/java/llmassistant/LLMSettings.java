@@ -107,6 +107,12 @@ public final class LLMSettings {
 	public boolean markErrors = true;
 	/** Reference documents: files or folders. */
 	public List<String> documents = new ArrayList<>();
+	/**
+	 * Subset of 'documents' (by the same absolute path) the model may also browse/search/read
+	 * directly (list_source_files, read_source_file, search_source, find_symbol), not just via
+	 * ranked excerpts - checked per folder/file in the Documents dialog.
+	 */
+	public List<String> sourceTools = new ArrayList<>();
 	/** Include the built-in ImageJ macro functions reference. */
 	public boolean useBuiltinReference = true;
 	/** Attach matching document excerpts to each message. */
@@ -201,17 +207,41 @@ public final class LLMSettings {
 			return;
 		}
 		apiKeys.clear();
-		String keys = p.getProperty("apiKeys");
-		if(keys != null) {
-			for(String line : keys.split("\n")) {
-				String[] parts = line.split("\t", -1);
-				if(parts.length >= 3 && !parts[0].isBlank())
-					apiKeys.add(new ApiKey(parts[0], parts[2], parts[1]));
+		int count = parseInt(p.getProperty("apiKeyCount"), -1);
+		if(count >= 0) {
+			// current format: one flat property per field, immune to a key/name/URL ever
+			// containing the tab/newline delimiters the old packed format relied on
+			for(int i = 0; i < count; i++) {
+				String name = p.getProperty("apiKey." + i + ".name", "");
+				if(name.isBlank())
+					continue;
+				String url = p.getProperty("apiKey." + i + ".baseUrl", "");
+				String key = p.getProperty("apiKey." + i + ".key", "");
+				apiKeys.add(new ApiKey(name, key, url));
 			}
 		} else {
-			String old = p.getProperty("apiKey", ""); // single key of earlier versions
-			if(!old.isBlank())
-				apiKeys.add(new ApiKey("Default", old.trim(), ""));
+			/*
+			 * Older format: all keys packed into one "apiKeys" value as tab-separated fields,
+			 * newline-separated per key. Properties.store()/load() round-trips embedded
+			 * tabs/newlines correctly, but only as long as nothing else in the pipeline (an
+			 * API key pasted with an embedded line break, a stray control character from a
+			 * clipboard on some systems, etc.) introduces one of those exact delimiter
+			 * characters into a field's own content - then a field's value and the record
+			 * boundary become indistinguishable and keys come back merged/garbled. Kept here
+			 * only to migrate existing settings files forward; save() no longer writes it.
+			 */
+			String keys = p.getProperty("apiKeys");
+			if(keys != null) {
+				for(String line : keys.split("\n")) {
+					String[] parts = line.split("\t", -1);
+					if(parts.length >= 3 && !parts[0].isBlank())
+						apiKeys.add(new ApiKey(parts[0], parts[2], parts[1]));
+				}
+			} else {
+				String old = p.getProperty("apiKey", ""); // single key of earlier versions
+				if(!old.isBlank())
+					apiKeys.add(new ApiKey("Default", old.trim(), ""));
+			}
 		}
 		activeKey = p.getProperty("activeKey", apiKeys.isEmpty() ? "" : apiKeys.get(0).name);
 		baseUrl = p.getProperty("baseUrl", baseUrl);
@@ -242,6 +272,10 @@ public final class LLMSettings {
 		for(String d : p.getProperty("documents", "").split("\n"))
 			if(!d.isBlank())
 				documents.add(d.trim());
+		sourceTools.clear();
+		for(String d : p.getProperty("sourceTools", "").split("\n"))
+			if(!d.isBlank())
+				sourceTools.add(d.trim());
 		extraInstructions = p.getProperty("extraInstructions", extraInstructions);
 		models.clear();
 		for(String m : p.getProperty("models", "").split(",")) {
@@ -252,10 +286,15 @@ public final class LLMSettings {
 
 	public void save() {
 		Properties p = new Properties();
-		StringBuilder keys = new StringBuilder();
-		for(ApiKey k : apiKeys) // name <TAB> base URL <TAB> key, one per line
-			keys.append(clean(k.name)).append('\t').append(clean(k.baseUrl)).append('\t').append(clean(k.key)).append('\n');
-		p.setProperty("apiKeys", keys.toString().strip());
+		// one flat property per field - see load()'s comment on why the old packed
+		// "apiKeys" format (one value, tab/newline-delimited) is no longer written
+		p.setProperty("apiKeyCount", "" + apiKeys.size());
+		for(int i = 0; i < apiKeys.size(); i++) {
+			ApiKey k = apiKeys.get(i);
+			p.setProperty("apiKey." + i + ".name", k.name == null ? "" : k.name);
+			p.setProperty("apiKey." + i + ".baseUrl", k.baseUrl == null ? "" : k.baseUrl);
+			p.setProperty("apiKey." + i + ".key", k.key == null ? "" : k.key);
+		}
 		p.setProperty("activeKey", activeKey == null ? "" : activeKey);
 		p.setProperty("baseUrl", baseUrl);
 		p.setProperty("model", model);
@@ -283,6 +322,7 @@ public final class LLMSettings {
 		p.setProperty("embeddingBaseUrl", embeddingBaseUrl == null ? "" : embeddingBaseUrl);
 		p.setProperty("embeddingDimensions", "" + embeddingDimensions);
 		p.setProperty("documents", String.join("\n", documents));
+		p.setProperty("sourceTools", String.join("\n", sourceTools));
 		p.setProperty("extraInstructions", extraInstructions == null ? "" : extraInstructions);
 		File f = settingsFile();
 		try {
@@ -304,10 +344,6 @@ public final class LLMSettings {
 		} catch(UnsupportedOperationException | java.io.IOException e) {
 			// Windows: not a POSIX file system, rely on the user profile ACLs.
 		}
-	}
-
-	private static String clean(String s) {
-		return s == null ? "" : s.replace('\t', ' ').replace('\n', ' ').replace('\r', ' ').trim();
 	}
 
 	public Double temperatureValue() {

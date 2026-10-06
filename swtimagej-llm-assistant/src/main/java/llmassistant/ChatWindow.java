@@ -306,6 +306,8 @@ public class ChatWindow implements ImageJTools.Host {
 	private static final String P_EXPLAIN = "Explain what the code in the editor does, step by step.";
 	private static final String P_EXPLAIN_SEL = "Explain the code selected in the editor, step by step.";
 	private static final String P_FIX = "Review the code in the editor, find bugs or problems and write an improved version into the editor.";
+	private static final String P_FORMAT = "Reformat the code in the editor for consistent style (indentation, spacing, brace placement, blank lines) without changing its behavior, and write the result back into the editor.";
+	private static final String P_PARALLEL = "Review the Java code in the editor for parts that would genuinely benefit from using multiple CPU cores: independent per-iteration work over enough elements, with no shared mutable state and no dependency between iterations. Where that is clearly the case, rewrite it using a fitting construct - e.g. IntStream.range(0, n).parallel().forEach(...), Arrays.parallelSort, or a fixed-size ExecutorService/ForkJoinPool - with each task writing only to its own slice of the output (e.g. by index) to avoid race conditions. Do NOT parallelize anything that touches the SWT UI thread, ImagePlus/ImageProcessor display state (createImage/createSwtImage, ImageWindow, ImagePlus.show/updateAndDraw) or other SWTImageJ APIs that are not thread-safe - leave those on the calling thread. If no part of the code is actually a good candidate, say so instead of forcing it. Write the improved version back into the editor and briefly explain what was parallelized and why.";
 	private static final String P_COMMENTS = "Add clear comments to the code in the editor and write the result back into the editor.";
 	private static final String P_JAVA = "Convert the code in the editor into an equivalent SWTImageJ Java plugin (a class with an underscore in its name implementing ij.plugin.PlugIn, or PlugInFilter if it processes the active image), open it in a new tab, compile and test it with run_code (language java), and fix any compiler errors.";
 	private static final String P_FIND = "Find errors and problems in the code in the editor and mark them with quick fixes: for Java call check_code first; in any case read the code with get_editor_text (line_numbers=true) and review it (wrong ImageJ command names or option strings - verify with search_commands -, typos, syntax errors, logic errors, missing checks). Then call mark_issues once with all problems, each with a precise 'match' where possible and a 'replacement' containing the corrected text. Do not change the editor text yourself. Finish with a short summary of the problems.";
@@ -320,6 +322,8 @@ public class ChatWindow implements ImageJTools.Host {
 		quickItem(m, "Explain code", P_EXPLAIN, false);
 		quickItem(m, "Explain selection", P_EXPLAIN_SEL, false);
 		quickItem(m, "Fix / improve", P_FIX, false);
+		quickItem(m, "Format code", P_FORMAT, false);
+		quickItem(m, "Parallelize for multiple cores", P_PARALLEL, false);
 		quickItem(m, "Add comments", P_COMMENTS, false);
 		quickItem(m, "Convert to Java plugin", P_JAVA, false);
 		new MenuItem(m, SWT.SEPARATOR);

@@ -109,6 +109,36 @@ settings, project conventions, example macros.
 * The index is built in the background when the chat opens; only the excerpts
   that match are sent to the server, never whole documents.
 
+### Direct source browsing/search – optional
+
+Excerpt search is built for prose-style Q&A; it's less precise for "find every
+caller of this method" style questions, where the model needs to look at the
+real file structure rather than a ranked snippet. Tick the checkbox next to a
+document folder or file to also let the model browse, grep and read it directly:
+
+* Each row in the Documents list has a checkbox (new column on the left of the
+  table). Checking it enables four extra tools scoped to that entry: it has no
+  effect on `search_documents`/excerpt indexing, which keeps working the same
+  whether the checkbox is on or off.
+* A newly added folder or file is checked **automatically** when it looks like
+  source code (most of its supported files are `.ijm .java .js .py .bsh .groovy
+  .r .m`); prose/reference material (Markdown, PDF, …) defaults to unchecked.
+  Toggle it either way at any time – a file row inside an indexed folder
+  toggles the whole folder, same as removing one removes the whole folder.
+* `list_source_files` – lists files under the enabled entries, optionally
+  filtered by a name substring and/or extension.
+* `search_source` – greps the enabled entries' file contents with a regular
+  expression (plain text also works) and returns matching `file:line: text`.
+* `read_source_file` – returns a file's content with line numbers, optionally
+  restricted to a line range, so the model can pull full context around a
+  `search_source`/`find_symbol` hit.
+* `find_symbol` – a regex-based (not a real parser) guess at where a class,
+  method or function name is declared; verify with `read_source_file`.
+* These tools only ever read files under the checked entries (path-traversal
+  is blocked the same way as `read_script`'s Script Explorer sandbox) and are
+  not gated behind **Confirm before running code** – they're read-only, so the
+  checkbox itself is the consent, not a per-call approval dialog.
+
 ### Semantic (hybrid) search – optional
 
 Keyword search is strong on exact terms (function names, settings, numbers)
@@ -264,6 +294,7 @@ In Eclipse you can instead create a plug-in project like the
 | `check_code` | Compiles the editor's Java code without running it and marks the problems |
 | `apply_quick_fixes`, `clear_markers` | Applies the assistant's quick fixes / removes markers |
 | `search_documents`, `list_documents` | Searches the reference documents / lists them |
+| `list_source_files`, `search_source`, `read_source_file`, `find_symbol` | Browse/grep/read files directly in document entries checked for it (⚙ > Documents...) |
 | `list_scripts` | Script files in the Script Explorer folders (plugins, macros), with filter |
 | `read_script` | Reads one of these files without opening it |
 | `open_script` | Opens a file in a Script Explorer tab and makes it the target |

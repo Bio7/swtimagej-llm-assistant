@@ -27,8 +27,11 @@ import java.util.Enumeration;
 import java.util.HashSet;
 import java.util.Hashtable;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Pattern;
+import java.util.regex.PatternSyntaxException;
 
 import java.io.ByteArrayOutputStream;
 import java.util.Base64;
@@ -157,6 +160,16 @@ public class ImageJTools {
 					Json.obj("query", p("string", "Keywords or a question, e.g. 'setAutoThreshold methods' or 'nuclei segmentation protocol'."), "max_results", p("integer", "Default 5.")), "query"));
 			t.add(fn("list_documents", "Lists the reference documents available to search_documents.", null));
 		}
+		if(!settings.sourceTools.isEmpty()) {
+			t.add(fn("list_source_files", "Lists files in the reference folders/files enabled for direct browsing (checked in the Documents dialog), optionally filtered by a name substring and/or extension. Use this (or search_source) before read_source_file to find the right path.",
+					Json.obj("query", p("string", "Optional case-insensitive filter on the relative path."), "extension", p("string", "Optional file extension filter, e.g. 'java' or '.java'."))));
+			t.add(fn("search_source", "Searches the enabled reference folders' file contents with a regular expression (case-insensitive, plain text also works) and returns matching 'file:line: text'. Use it for precise lookups a chunk/embedding search can miss, e.g. finding every caller of a method or the exact declaration of a constant.",
+					Json.obj("query", p("string", "Regular expression or plain text to search for."), "extension", p("string", "Optional file extension filter, e.g. 'java'."), "max_results", p("integer", "Default 30, max 100.")), "query"));
+			t.add(fn("read_source_file", "Returns the content of a file from the enabled reference folders, with 1-based line numbers, optionally restricted to a line range. Use it after list_source_files/search_source/find_symbol to read the full context around a match.",
+					Json.obj("path", p("string", "Path as returned by list_source_files/search_source/find_symbol."), "from_line", p("integer", "1-based first line (default 1)."), "to_line", p("integer", "1-based last line (default: end of file)."))));
+			t.add(fn("find_symbol", "Heuristic search (regular expressions, not a real parser) for where a class, method or function name is declared in the enabled reference folders. Verify the result with read_source_file.",
+					Json.obj("name", p("string", "Class/method/function name to look for.")), "name"));
+		}
 		t.add(fn("list_scripts", "Lists macro/script files in the Script Explorer folders (ImageJ plugins and macros directories), optionally filtered by a name substring. Paths are relative to the folder root shown in brackets.",
 				Json.obj("query", p("string", "Optional case-insensitive filter on the relative path."))));
 		t.add(fn("read_script", "Returns the content of a macro/script file from the Script Explorer folders without opening it, e.g. to reuse existing code.",
@@ -256,6 +269,14 @@ public class ImageJTools {
 						sb.append("- ").append(d.name).append(" (").append(d.type).append(", ").append(d.chunks).append(" excerpts").append("OK".equals(d.status) ? "" : ", " + d.status).append(")\n");
 					return sb.length() == 0 ? "No documents." : sb.toString();
 				}
+				case "list_source_files":
+					return listSourceFiles(Json.str(args, "query", ""), Json.str(args, "extension", ""));
+				case "search_source":
+					return searchSource(Json.str(args, "query", ""), Json.str(args, "extension", ""), intArg(args, "max_results", 0));
+				case "read_source_file":
+					return readSourceFile(Json.str(args, "path", ""), intArg(args, "from_line", 0), intArg(args, "to_line", 0));
+				case "find_symbol":
+					return findSymbol(Json.str(args, "name", ""));
 				case "list_scripts":
 					return listScripts(Json.str(args, "query", ""));
 				case "read_script":
@@ -716,6 +737,189 @@ public class ImageJTools {
 		editors.setSelected(ed);
 		host.info("Opened \"" + f.getName() + "\"" + (editors.isInExplorer(ed) ? " in the Script Explorer" : ""));
 		return "OK: '" + f.getName() + "' opened and is now the target editor (" + editors.labelOf(ed) + ").";
+	}
+
+	/* ================================================================ source folders (Documents dialog checkbox) */
+
+	private static final int MAX_SEARCH_RESULTS = 100, DEFAULT_SEARCH_RESULTS = 30, MAX_SYMBOL_RESULTS = 40, MAX_SOURCE_FILE_BYTES = 40000;
+
+	/** settings.sourceTools entries (files or folders) that still exist on disk. */
+	private List<File> sourceRoots() {
+		List<File> r = new ArrayList<>();
+		for(String p : settings.sourceTools) {
+			File f = new File(p);
+			if(f.exists() && !r.contains(f))
+				r.add(f);
+		}
+		return r;
+	}
+
+	private static String noSourceRootsMessage() {
+		return "No reference folder is enabled for direct browsing. Check a folder or file in the Documents dialog (⚙ > Documents...) to enable it.";
+	}
+
+	/** All files under a source root, recursively (not filtered by supported type - this is a plain file browser). */
+	private static void collectSourceFiles(File dir, List<File> out, int depth) {
+		File[] files = dir.listFiles();
+		if(files == null || depth > 10 || out.size() >= MAX_LISTED * 4)
+			return;
+		java.util.Arrays.sort(files);
+		for(File f : files) {
+			if(f.getName().startsWith("."))
+				continue;
+			if(f.isDirectory())
+				collectSourceFiles(f, out, depth + 1);
+			else if(f.isFile())
+				out.add(f);
+		}
+	}
+
+	/** Every file reachable from the enabled roots, each paired with its "root/relative" display path. */
+	private static List<Map.Entry<String, File>> sourceFiles(List<File> roots) {
+		List<Map.Entry<String, File>> out = new ArrayList<>();
+		for(File root : roots) {
+			if(root.isFile()) {
+				out.add(Map.entry(root.getName(), root));
+				continue;
+			}
+			List<File> files = new ArrayList<>();
+			collectSourceFiles(root, files, 0);
+			for(File f : files)
+				out.add(Map.entry(root.getName() + "/" + root.toPath().relativize(f.toPath()).toString().replace('\\', '/'), f));
+		}
+		return out;
+	}
+
+	private String listSourceFiles(String query, String extension) {
+		List<File> roots = sourceRoots();
+		if(roots.isEmpty())
+			return noSourceRootsMessage();
+		String q = query == null ? "" : query.toLowerCase(Locale.ROOT).trim();
+		String ext = normalizeExtension(extension);
+		List<String> out = new ArrayList<>();
+		for(Map.Entry<String, File> e : sourceFiles(roots)) {
+			if(out.size() >= MAX_LISTED)
+				break;
+			String rel = e.getKey(), lower = rel.toLowerCase(Locale.ROOT);
+			if((q.isEmpty() || lower.contains(q)) && (ext.isEmpty() || lower.endsWith(ext)))
+				out.add(rel + " (" + e.getValue().length() + " bytes)");
+		}
+		StringBuilder sb = new StringBuilder("Roots: ");
+		for(File r : roots)
+			sb.append('[').append(r.getName()).append("] = ").append(r.getAbsolutePath()).append("  ");
+		sb.append('\n').append(out.isEmpty() ? "No matching files." : String.join("\n", out));
+		if(out.size() >= MAX_LISTED)
+			sb.append("\n... (list truncated, narrow the query)");
+		return sb.toString();
+	}
+
+	private static String normalizeExtension(String extension) {
+		String ext = extension == null ? "" : extension.toLowerCase(Locale.ROOT).trim();
+		return ext.isEmpty() || ext.startsWith(".") ? ext : "." + ext;
+	}
+
+	/** Resolves a list_source_files/search_source/find_symbol path; only files inside the enabled roots are allowed. */
+	private static File resolveSourceFile(String path, List<File> roots) throws IOException {
+		String p = path.replaceAll("\\s+\\(\\d+ bytes\\)$", "").replace('\\', '/').trim();
+		for(File root : roots) {
+			if(root.isFile()) {
+				if(p.equals(root.getName()) || new File(p).getCanonicalFile().equals(root.getCanonicalFile()))
+					return root;
+				continue;
+			}
+			File candidate;
+			if(new File(p).isAbsolute())
+				candidate = new File(p);
+			else if(p.startsWith(root.getName() + "/"))
+				candidate = new File(root, p.substring(root.getName().length() + 1));
+			else
+				candidate = new File(root, p);
+			File c = candidate.getCanonicalFile();
+			if(c.getPath().startsWith(root.getCanonicalPath() + File.separator) && c.isFile())
+				return c;
+		}
+		throw new IOException("File not found in the enabled reference folders: " + path + " (use list_source_files or search_source)");
+	}
+
+	private String readSourceFile(String path, int fromLine, int toLine) throws IOException {
+		List<File> roots = sourceRoots();
+		if(roots.isEmpty())
+			return noSourceRootsMessage();
+		File f = resolveSourceFile(path, roots);
+		List<String> lines = Files.readAllLines(f.toPath(), StandardCharsets.UTF_8);
+		if(lines.isEmpty())
+			return "File: " + f.getAbsolutePath() + " (empty)";
+		int from = Math.max(1, fromLine == 0 ? 1 : fromLine);
+		int to = Math.min(lines.size(), toLine <= 0 ? lines.size() : toLine);
+		if(from > lines.size())
+			return "File: " + f.getAbsolutePath() + " has only " + lines.size() + " line(s).";
+		StringBuilder body = new StringBuilder();
+		for(int i = from; i <= to; i++)
+			body.append(i).append('\t').append(lines.get(i - 1)).append('\n');
+		return "File: " + f.getAbsolutePath() + " (" + lines.size() + " line(s))\n----- content (lines " + from + "-" + to + ") -----\n" + clip(body.toString(), MAX_SOURCE_FILE_BYTES);
+	}
+
+	private String searchSource(String query, String extension, int maxResults) {
+		List<File> roots = sourceRoots();
+		if(roots.isEmpty())
+			return noSourceRootsMessage();
+		if(query == null || query.isBlank())
+			return "ERROR: query must not be empty.";
+		Pattern pat;
+		try {
+			pat = Pattern.compile(query, Pattern.CASE_INSENSITIVE);
+		} catch(PatternSyntaxException e) {
+			pat = Pattern.compile(Pattern.quote(query), Pattern.CASE_INSENSITIVE);
+		}
+		String ext = normalizeExtension(extension);
+		int limit = maxResults > 0 ? Math.min(maxResults, MAX_SEARCH_RESULTS) : DEFAULT_SEARCH_RESULTS;
+		List<String> hits = new ArrayList<>();
+		for(Map.Entry<String, File> e : sourceFiles(roots)) {
+			if(hits.size() >= limit)
+				break;
+			String rel = e.getKey();
+			if(!ext.isEmpty() && !rel.toLowerCase(Locale.ROOT).endsWith(ext))
+				continue;
+			grepFile(e.getValue(), rel, pat, hits, limit);
+		}
+		if(hits.isEmpty())
+			return "No matches for \"" + query + "\".";
+		return clip(hits.size() + " match(es)" + (hits.size() >= limit ? " (truncated at " + limit + ")" : "") + ":\n" + String.join("\n", hits), MAX_RESULT);
+	}
+
+	/** Heuristic (regex, not a real parser) search for a class/method/function declaration. */
+	private String findSymbol(String name) {
+		List<File> roots = sourceRoots();
+		if(roots.isEmpty())
+			return noSourceRootsMessage();
+		if(name == null || name.isBlank())
+			return "ERROR: name must not be empty.";
+		String n = Pattern.quote(name.trim());
+		Pattern pat = Pattern.compile("\\b(class|interface|enum|def|function)\\s+" + n + "\\b|\\b" + n + "\\s*\\(", Pattern.CASE_INSENSITIVE);
+		List<String> hits = new ArrayList<>();
+		for(Map.Entry<String, File> e : sourceFiles(roots)) {
+			if(hits.size() >= MAX_SYMBOL_RESULTS)
+				break;
+			grepFile(e.getValue(), e.getKey(), pat, hits, MAX_SYMBOL_RESULTS);
+		}
+		if(hits.isEmpty())
+			return "No declaration-like match for \"" + name + "\". Try search_source for a broader text search.";
+		return "Possible declarations of \"" + name + "\" (heuristic, not a real parser - verify with read_source_file):\n" + clip(String.join("\n", hits), MAX_RESULT);
+	}
+
+	/** Appends up to 'limit' "rel:line: text" matches of a compiled pattern in one file; silently skips unreadable (e.g. binary) files. */
+	private static void grepFile(File f, String rel, Pattern pat, List<String> hits, int limit) {
+		if(f.length() > 5_000_000)
+			return;
+		List<String> lines;
+		try {
+			lines = Files.readAllLines(f.toPath(), StandardCharsets.UTF_8);
+		} catch(Exception e) {
+			return;
+		}
+		for(int i = 0; i < lines.size() && hits.size() < limit; i++)
+			if(pat.matcher(lines.get(i)).find())
+				hits.add(rel + ":" + (i + 1) + ": " + lines.get(i).strip());
 	}
 
 	/* ================================================================ running code */

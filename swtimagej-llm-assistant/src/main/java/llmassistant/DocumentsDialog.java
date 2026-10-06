@@ -79,12 +79,12 @@ public class DocumentsDialog {
 		shell.setLayout(new GridLayout(1, false));
 
 		Label intro = new Label(shell, SWT.WRAP);
-		intro.setText("Documents improve the answers: the best-matching excerpts are attached to your messages, and the model can search them itself. Supported: .txt .md .html .csv .json .xml, code (.ijm .java .py .js .bsh .groovy .r), Word .docx, OpenDocument .odt, and .pdf (needs pdfbox-app-*.jar in plugins/jars).");
+		intro.setText("Documents improve the answers: the best-matching excerpts are attached to your messages, and the model can search them itself. Supported: .txt .md .html .csv .json .xml, code (.ijm .java .py .js .bsh .groovy .r), Word .docx, OpenDocument .odt, and .pdf (needs pdfbox-app-*.jar in plugins/jars). Check a folder or file below to also let the model browse, search and read its files directly (list_source_files, search_source, read_source_file, find_symbol) - useful for source code, usually not needed for prose/reference documents.");
 		GridData ig = new GridData(SWT.FILL, SWT.CENTER, true, false);
 		ig.widthHint = 640;
 		intro.setLayoutData(ig);
 
-		table = new Table(shell, SWT.BORDER | SWT.MULTI | SWT.FULL_SELECTION);
+		table = new Table(shell, SWT.BORDER | SWT.MULTI | SWT.FULL_SELECTION | SWT.CHECK);
 		table.setHeaderVisible(true);
 		table.setLinesVisible(true);
 		GridData tg = new GridData(SWT.FILL, SWT.FILL, true, true);
@@ -95,6 +95,7 @@ public class DocumentsDialog {
 			col.setText(c[0]);
 			col.setWidth(Integer.parseInt(c[1]));
 		}
+		table.addListener(SWT.Selection, this::checkToggled);
 
 		Composite bar = new Composite(shell, SWT.NONE);
 		bar.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
@@ -246,8 +247,12 @@ public class DocumentsDialog {
 			boolean child = !d.folder && d.entry != null && new File(d.entry).isDirectory();
 			it.setText(new String[]{(child ? "    " : "") + d.name, d.type, "" + d.chunks, d.status == null ? "" : d.status});
 			it.setData(d);
-			if(d.entry != null)
+			if("built-in".equals(d.path))
+				it.setChecked(s.useBuiltinReference);
+			else if(d.entry != null) {
 				indexed.add(d.entry);
+				it.setChecked(s.sourceTools.contains(d.entry));
+			}
 		}
 		for(String e : s.documents) { // added but not indexed yet
 			if(indexed.contains(e))
@@ -256,12 +261,56 @@ public class DocumentsDialog {
 			File f = new File(e);
 			it.setText(new String[]{f.getName() + (f.isDirectory() ? "/" : ""), f.isDirectory() ? "folder" : "", "", "waiting for indexing ..."});
 			it.setData(e);
+			it.setChecked(s.sourceTools.contains(e));
 		}
 		shownVersion = kb.version();
 		status.setText(kb.isIndexing() ? "Indexing ..." : kb.summary());
 		status.getParent().layout();
 		semanticStatus.setText("Status: " + kb.semanticStatus());
 		semanticStatus.getParent().layout();
+	}
+
+	/**
+	 * A row's checkbox was clicked: toggles whether the model's direct browse/search/read tools
+	 * (list_source_files, search_source, read_source_file, find_symbol) are enabled for the
+	 * entry it belongs to. A file row inside an added folder shares the folder's own entry path
+	 * (see fill()'s "child" rows), so checking it toggles the whole folder, same as removing one
+	 * removes the whole folder; fill() then resyncs every row sharing that entry.
+	 * <p>
+	 * SWT's checkbox click does not also select the row, so Remove (which acts on
+	 * table.getSelection()) would otherwise appear to silently do nothing right after checking a
+	 * box - select it explicitly here to match what users expect.
+	 */
+	private void checkToggled(org.eclipse.swt.widgets.Event e) {
+		if(e.detail != SWT.CHECK)
+			return;
+		TableItem it = (TableItem)e.item;
+		table.setSelection(it);
+		Object data = it.getData();
+		if(data instanceof KnowledgeBase.DocInfo doc && "built-in".equals(doc.path)) {
+			/*
+			 * Always shown checked (it's included by default) but not togglable here - toggling
+			 * it directly used to also reindex, which drops the row out of the table right away
+			 * and looks like the document got removed. Use the "Include the ImageJ macro
+			 * functions reference" option, or Remove, to actually turn it off.
+			 */
+			it.setChecked(true);
+			return;
+		}
+		String entry = data instanceof KnowledgeBase.DocInfo doc ? doc.entry : data instanceof String path ? path : null;
+		if(entry == null) {
+			it.setChecked(false);
+			return;
+		}
+		if(it.getChecked()) {
+			if(!s.sourceTools.contains(entry))
+				s.sourceTools.add(entry);
+		} else
+			s.sourceTools.remove(entry);
+		s.save();
+		fill();
+		if(onChange != null)
+			onChange.run();
 	}
 
 	/** Refreshes the status while indexing / embedding runs. */
@@ -354,6 +403,8 @@ public class DocumentsDialog {
 			if(f.isFile() && !KnowledgeBase.supported(f))
 				problems.add(f.getName() + " (type " + KnowledgeBase.extension(f) + " not supported)");
 			s.documents.add(abs); // unsupported files are listed too, with an explanation
+			if(KnowledgeBase.looksLikeCode(f)) // smart default: a folder/file that's mostly source code
+				s.sourceTools.add(abs);
 			names.add(f.getName() + (f.isDirectory() ? "/" : ""));
 		}
 		if(!names.isEmpty()) {
@@ -413,6 +464,7 @@ public class DocumentsDialog {
 			Object data = it.getData();
 			if(data instanceof String) { // not indexed yet
 				s.documents.remove(data);
+				s.sourceTools.remove(data);
 				continue;
 			}
 			KnowledgeBase.DocInfo d = (KnowledgeBase.DocInfo)data;
@@ -422,6 +474,7 @@ public class DocumentsDialog {
 			} else if(d.entry != null) {
 				// a file inside an added folder removes the whole folder entry
 				s.documents.remove(d.entry);
+				s.sourceTools.remove(d.entry);
 			}
 		}
 		s.save();

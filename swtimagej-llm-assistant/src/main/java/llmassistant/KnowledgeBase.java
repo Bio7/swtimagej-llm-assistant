@@ -397,6 +397,41 @@ public final class KnowledgeBase {
 		return !typeOf(f).equals("?");
 	}
 
+	/**
+	 * Documents dialog default: does this file, or most of a folder's supported files, look
+	 * like source code rather than prose/reference material? Used to default the "enable
+	 * direct browse/search tools" checkbox on for a newly added folder.
+	 */
+	public static boolean looksLikeCode(File f) {
+		if(f.isFile())
+			return "code".equals(typeOf(f));
+		if(!f.isDirectory())
+			return false;
+		int[] counts = {0, 0}; // code, other supported
+		scanForCode(f, counts, 0);
+		return counts[0] > 0 && counts[0] >= counts[1];
+	}
+
+	private static void scanForCode(File dir, int[] counts, int depth) {
+		File[] fs = dir.listFiles();
+		if(fs == null || depth > 6)
+			return;
+		for(File f : fs) {
+			if(counts[0] + counts[1] >= 500)
+				return;
+			if(f.getName().startsWith("."))
+				continue;
+			if(f.isDirectory())
+				scanForCode(f, counts, depth + 1);
+			else if(f.isFile() && supported(f)) {
+				if("code".equals(typeOf(f)))
+					counts[0]++;
+				else
+					counts[1]++;
+			}
+		}
+	}
+
 	private static String typeOf(File f) {
 		String n = f.getName().toLowerCase(Locale.ROOT);
 		if(ends(n, PDF_EXT))
