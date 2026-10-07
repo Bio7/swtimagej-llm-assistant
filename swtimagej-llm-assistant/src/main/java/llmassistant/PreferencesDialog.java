@@ -41,7 +41,7 @@ public class PreferencesDialog {
 	private final LLMSettings s = LLMSettings.get();
 	private Shell shell;
 	private Text urlText, tempText, timeoutText, roundsText, extraText, snapText;
-	private Combo modelCombo, langCombo, keyCombo;
+	private Combo modelCombo, langCombo, keyCombo, reasoningCombo;
 	private Label keyInfo;
 	/** Working copy of the keys; committed to the settings on Save / Test connection. */
 	private final java.util.List<LLMSettings.ApiKey> keys = new java.util.ArrayList<>();
@@ -141,6 +141,12 @@ public class PreferencesDialog {
 		langCombo.setItems(LANG_NAMES);
 		int li = java.util.Arrays.asList(LANG_IDS).indexOf(s.defaultLanguage);
 		langCombo.select(li < 0 ? 0 : li);
+		label(gen, "Reasoning effort:");
+		reasoningCombo = new Combo(gen, SWT.DROP_DOWN);
+		reasoningCombo.setItems(new String[]{"none", "low", "medium", "high"});
+		reasoningCombo.setText(s.reasoningEffort == null ? "" : s.reasoningEffort);
+		reasoningCombo.setToolTipText("Some reasoning models need this set to \"none\" to allow function tools at all - see the error message if tool calls fail with something like \"Function tools with reasoning_effort are not supported ... set reasoning_effort to 'none'\".");
+		reasoningCombo.setLayoutData(new GridData(100, SWT.DEFAULT));
 
 		/* --- behaviour --- */
 		Group beh = group("SWTImageJ integration", 1);
@@ -376,6 +382,7 @@ public class PreferencesDialog {
 		s.model = modelCombo.getText().trim().isEmpty() ? LLMSettings.DEFAULT_MODEL : modelCombo.getText().trim();
 		s.rememberModel(s.model);
 		s.temperature = tempText.getText().trim();
+		s.reasoningEffort = reasoningCombo.getText().trim();
 		s.timeoutSeconds = parse(timeoutText.getText(), s.timeoutSeconds);
 		s.maxToolRounds = Math.max(1, parse(roundsText.getText(), s.maxToolRounds));
 		s.defaultLanguage = LANG_IDS[Math.max(0, langCombo.getSelectionIndex())];

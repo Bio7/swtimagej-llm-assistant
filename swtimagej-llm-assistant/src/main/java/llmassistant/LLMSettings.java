@@ -87,6 +87,15 @@ public final class LLMSettings {
 	public List<String> models = new ArrayList<>();
 	/** Empty = let the server use its default (some reasoning models reject temperature). */
 	public String temperature = "";
+	/**
+	 * OpenAI's "reasoning_effort" request field, e.g. "none", "low", "medium", "high" (exact
+	 * values depend on the model/server). Empty = omit it, i.e. use the server's own default.
+	 * Some newer reasoning models reject function tools unless this is explicitly set to "none"
+	 * at /v1/chat/completions (error: "Function tools with reasoning_effort are not supported
+	 * ... set reasoning_effort to 'none'"), since they otherwise default it to something else
+	 * on their own whenever tools are present.
+	 */
+	public String reasoningEffort = "";
 	public int timeoutSeconds = 120;
 	public int maxToolRounds = 8;
 	public boolean enableTools = true;
@@ -247,6 +256,7 @@ public final class LLMSettings {
 		baseUrl = p.getProperty("baseUrl", baseUrl);
 		model = p.getProperty("model", model);
 		temperature = p.getProperty("temperature", temperature);
+		reasoningEffort = p.getProperty("reasoningEffort", reasoningEffort);
 		timeoutSeconds = parseInt(p.getProperty("timeoutSeconds"), timeoutSeconds);
 		maxToolRounds = parseInt(p.getProperty("maxToolRounds"), maxToolRounds);
 		enableTools = Boolean.parseBoolean(p.getProperty("enableTools", "" + enableTools));
@@ -300,6 +310,7 @@ public final class LLMSettings {
 		p.setProperty("model", model);
 		p.setProperty("models", String.join(",", models));
 		p.setProperty("temperature", temperature == null ? "" : temperature.trim());
+		p.setProperty("reasoningEffort", reasoningEffort == null ? "" : reasoningEffort.trim());
 		p.setProperty("timeoutSeconds", "" + timeoutSeconds);
 		p.setProperty("maxToolRounds", "" + maxToolRounds);
 		p.setProperty("enableTools", "" + enableTools);

@@ -242,6 +242,8 @@ public class OpenAIClient {
 		Double t = settings.temperatureValue();
 		if(t != null)
 			payload.put("temperature", t);
+		if(settings.reasoningEffort != null && !settings.reasoningEffort.isBlank())
+			payload.put("reasoning_effort", settings.reasoningEffort.trim());
 		if(tools != null && !tools.isEmpty()) {
 			payload.put("tools", tools);
 			payload.put("tool_choice", "auto");
