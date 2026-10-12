@@ -82,7 +82,7 @@ public class ChatWindow implements ImageJTools.Host {
 	private org.eclipse.swt.graphics.Image gearIcon;
 	private BusyIndicator busyIndicator;
 
-	private final List<Editor> editorItems = new ArrayList<>();
+	private final List<CodeTarget> editorItems = new ArrayList<>();
 	private final List<String[]> codeBlocks = new ArrayList<>(); // {language, code}
 	private final List<Map<String, Object>> history = Collections.synchronizedList(new ArrayList<>());
 	private final AtomicBoolean busy = new AtomicBoolean(false);
@@ -405,9 +405,14 @@ public class ChatWindow implements ImageJTools.Host {
 				error(EditorMarkers.UNAVAILABLE + "\nReason: " + EditorMarkers.unavailableReason());
 				return;
 			}
-			Editor ed = editors.target();
-			if(ed == null) {
+			CodeTarget target = editors.target();
+			if(target == null) {
 				info("No editor is open (open a macro or Java file in the Script Explorer or an editor window).");
+				return;
+			}
+			Editor ed = target.imagejEditor();
+			if(ed == null) {
+				info("Markers and quick fixes are only available in SWTImageJ editors, not in " + editors.labelOf(target) + ".");
 				return;
 			}
 			try {
@@ -719,17 +724,17 @@ public class ChatWindow implements ImageJTools.Host {
 				break;
 			default:
 				new Thread(() -> {
-					Editor ed = editors.target();
+					CodeTarget ed = editors.target();
 					if("new".equals(action) || ed == null) {
 						String cls = "java".equals(lang) && JavaRunner.isCompleteClass(code) ? JavaRunner.className(code) : null;
-						Editor n = editors.openNew(cls != null ? cls + ".java" : "LLM_Code_" + (i + 1) + EditorBridge.extensionFor(lang), code);
-						info("Opened code #" + (i + 1) + " in a new " + (editors.isInExplorer(n) ? "Script Explorer tab" : "editor window"));
+						CodeTarget n = editors.openNew(cls != null ? cls + ".java" : "LLM_Code_" + (i + 1) + EditorBridge.extensionFor(lang), code);
+						info("Opened code #" + (i + 1) + " in a new " + (n.imagejEditor() == null ? n.location() + " editor" : editors.isInExplorer(n) ? "Script Explorer tab" : "editor window"));
 						ui(this::refreshEditors);
 					} else if("insert".equals(action)) {
-						editors.insertAtCaret(ed, code);
+						ed.insertAtCaret(code);
 						info("Inserted code #" + (i + 1) + " into " + editors.labelOf(ed));
 					} else {
-						editors.replaceAll(ed, code);
+						ed.replaceAll(code);
 						info("Replaced content of " + editors.labelOf(ed) + " with code #" + (i + 1));
 					}
 				}, "LLM-Assistant-editor").start();
@@ -814,14 +819,14 @@ public class ChatWindow implements ImageJTools.Host {
 		if(editorCombo == null || editorCombo.isDisposed())
 			return;
 		int sel = editorCombo.getSelectionIndex();
-		Editor selected = sel > 0 && sel - 1 < editorItems.size() ? editorItems.get(sel - 1) : null;
+		CodeTarget selected = sel > 0 && sel - 1 < editorItems.size() ? editorItems.get(sel - 1) : null;
 		editorItems.clear();
 		editorItems.addAll(editors.listEditors());
 		editorCombo.removeAll();
 		editors.setSelected(null);
-		Editor auto = editors.target();
+		CodeTarget auto = editors.target();
 		editorCombo.add("Auto" + (auto != null ? " (" + editors.labelOf(auto) + ")" : editors.useExplorer() ? " (new Script Explorer tab)" : ""));
-		for(Editor e : editorItems)
+		for(CodeTarget e : editorItems)
 			editorCombo.add(editors.labelOf(e));
 		int idx = selected == null ? 0 : editorItems.indexOf(selected) + 1;
 		editorCombo.select(Math.max(0, idx));
@@ -934,6 +939,8 @@ public class ChatWindow implements ImageJTools.Host {
 			sb.append("browse existing scripts (list_scripts, read_script, open_script) and execute code (run_code, run_editor). ");
 			if(editors.useExplorer())
 				sb.append("SWTImageJ's Script Explorer is the user's main workspace: a file tree of the plugins and macros folders with one editor tab per file. The target editor is its selected tab, and set_editor_text mode 'new' opens a new tab. Reuse or adapt existing scripts from these folders when they fit. ");
+			if(EditorBridge.hasExternalEditors())
+				sb.append("Editors of the application that embeds SWTImageJ are listed with the application name as prefix (e.g. in get_imagej_context). If such an editor is the target, the editor tools read and write it, and set_editor_text mode 'new' opens new code in that application. Markers and quick fixes only work in SWTImageJ editors, and run_editor only runs languages SWTImageJ supports. ");
 			sb.append("Inspect the image or editor instead of guessing. When the user asks to create or change a macro, write it into the editor with set_editor_text (mode 'new' for a new file, 'replace' to change the existing one). ");
 			sb.append("You can open images (open_image: file path, URL or sample name from list_sample_images) and switch the active image (select_image). ");
 			if(settings.enableVision)
@@ -986,10 +993,10 @@ public class ChatWindow implements ImageJTools.Host {
 			attached.add("image info");
 		}
 		if(attachEditor.getSelection()) {
-			Editor ed = editors.target();
+			CodeTarget ed = editors.target();
 			if(ed != null) {
-				String code = editors.getText(ed);
-				String sel = editors.getSelection(ed);
+				String code = ed.text();
+				String sel = ed.selection();
 				if(code != null && !code.isBlank()) {
 					content.append("\n\n[").append(editors.labelOf(ed)).append("]\n```").append(EditorBridge.languageOf(ed)).append('\n').append(code.length() > 40000 ? code.substring(0, 40000) + "\n...[truncated]" : code).append("\n```\n");
 					if(!sel.isBlank())

@@ -26,7 +26,7 @@ import ij.plugin.PlugIn;
 public class LLM_Assistant implements PlugIn {
 
 	/** Shown in the chat window title and welcome text, to verify which build is running. */
-	public static final String VERSION = "2.4.2 (2026-10-07)";
+	public static final String VERSION = "2.4.4 (2026-10-07)";
 
 	@Override
 	public void run(String arg) {

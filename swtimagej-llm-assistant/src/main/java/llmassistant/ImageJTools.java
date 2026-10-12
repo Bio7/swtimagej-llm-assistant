@@ -198,9 +198,12 @@ public class ImageJTools {
 				case "check_code":
 					return checkCode();
 				case "apply_quick_fixes": {
-					Editor ed = editors.target();
-					if(ed == null)
+					CodeTarget t = editors.target();
+					if(t == null)
 						return "ERROR: no editor is open.";
+					Editor ed = t.imagejEditor();
+					if(ed == null)
+						return "ERROR: markers and quick fixes are only available in SWTImageJ editors, not in " + editors.labelOf(t) + ".";
 					int n = EditorMarkers.pendingFixes(ed);
 					if(n == 0)
 						return "No pending quick fixes from the assistant in " + editors.labelOf(ed) + ".";
@@ -211,9 +214,12 @@ public class ImageJTools {
 					return r;
 				}
 				case "clear_markers": {
-					Editor ed = editors.target();
-					if(ed == null)
+					CodeTarget t = editors.target();
+					if(t == null)
 						return "ERROR: no editor is open.";
+					Editor ed = t.imagejEditor();
+					if(ed == null)
+						return "ERROR: markers and quick fixes are only available in SWTImageJ editors, not in " + editors.labelOf(t) + ".";
 					EditorMarkers.clear(ed);
 					return "OK: markers removed from " + editors.labelOf(ed) + ".";
 				}
@@ -222,10 +228,10 @@ public class ImageJTools {
 				case "run_code":
 					return runWithApproval(Json.str(args, "code", ""), Json.str(args, "language", "ijm"), "The assistant wants to run this code");
 				case "run_editor": {
-					Editor ed = editors.target();
-					if(ed == null)
+					CodeTarget t = editors.target();
+					if(t == null)
 						return "ERROR: no editor is open.";
-					return runWithApproval(editors.getText(ed), EditorBridge.languageOf(ed), "The assistant wants to run the editor '" + EditorBridge.titleOf(ed) + "'", ed);
+					return runWithApproval(t.text(), t.language(), "The assistant wants to run the editor '" + t.title() + "'", t.imagejEditor());
 				}
 				case "save_java_plugin": {
 					String code = Json.str(args, "code", "");
@@ -321,13 +327,13 @@ public class ImageJTools {
 		sb.append("Open images (").append(titles.length).append("): ");
 		sb.append(titles.length == 0 ? "none" : String.join(" | ", titles)).append('\n');
 		sb.append(activeImageInfo(false));
-		List<Editor> eds = editors.listEditors();
-		Editor target = editors.target();
+		List<CodeTarget> eds = editors.listEditors();
+		CodeTarget target = editors.target();
 		boolean explorerOpen = EditorBridge.findExplorer() != null;
 		sb.append("Script Explorer: ").append(!EditorBridge.explorerAvailable() ? "not available in this version" : explorerOpen ? "open" : "closed").append(editors.useExplorer() ? " (default place for code)" : "").append('\n');
 		sb.append("Open editors (").append(eds.size()).append("): ");
-		for(Editor e : eds)
-			sb.append(editors.labelOf(e)).append(e == target ? " [target]" : "").append(" | ");
+		for(CodeTarget e : eds)
+			sb.append(editors.labelOf(e)).append(e.equals(target) ? " [target]" : "").append(" | ");
 		sb.append('\n');
 		ResultsTable rt = ResultsTable.getResultsTable();
 		if(rt != null && rt.size() > 0)
@@ -373,14 +379,17 @@ public class ImageJTools {
 	}
 
 	private String editorText(boolean lineNumbers) {
-		Editor ed = editors.target();
-		if(ed == null)
+		CodeTarget t = editors.target();
+		if(t == null)
 			return "No editor is open. Use set_editor_text with mode 'new' to create one, or open_script to open an existing file.";
-		String sel = editors.getSelection(ed);
-		String text = editors.getText(ed);
+		String sel = t.selection();
+		String text = t.text();
+		if(text == null)
+			text = "";
 		if(lineNumbers)
 			text = numbered(text);
-		return "Editor: " + editors.labelOf(ed) + " (language: " + EditorBridge.languageOf(ed) + ")\n" + (sel.isEmpty() ? "" : "Selected text:\n" + clip(sel, 4000) + "\n") + (EditorMarkers.available() ? EditorMarkers.describe(ed) : "") + "----- editor content" + (lineNumbers ? " (with line numbers)" : "") + " -----\n" + clip(text, 40000);
+		Editor ed = t.imagejEditor();
+		return "Editor: " + editors.labelOf(t) + " (language: " + t.language() + ")\n" + (sel.isEmpty() ? "" : "Selected text:\n" + clip(sel, 4000) + "\n") + (ed != null && EditorMarkers.available() ? EditorMarkers.describe(ed) : "") + "----- editor content" + (lineNumbers ? " (with line numbers)" : "") + " -----\n" + clip(text, 40000);
 	}
 
 	private static String numbered(String text) {
@@ -397,9 +406,12 @@ public class ImageJTools {
 	private String markIssues(Map<String, Object> args) {
 		if(!EditorMarkers.available())
 			return EditorMarkers.UNAVAILABLE;
-		Editor ed = editors.target();
-		if(ed == null)
+		CodeTarget t = editors.target();
+		if(t == null)
 			return "ERROR: no editor is open.";
+		Editor ed = t.imagejEditor();
+		if(ed == null)
+			return "ERROR: markers and quick fixes are only available in SWTImageJ editors, not in " + editors.labelOf(t) + ".";
 		List<Object> raw = Json.asList(args.get("issues"));
 		if(raw == null || raw.isEmpty())
 			return "ERROR: 'issues' must be a non-empty array.";
@@ -424,13 +436,24 @@ public class ImageJTools {
 	}
 
 	private String checkCode() {
+		CodeTarget t = editors.target();
+		if(t == null)
+			return "ERROR: no editor is open.";
+		String lang = t.language();
+		String code = t.text();
+		Editor ed = t.imagejEditor();
+		if("java".equals(lang) && (ed == null || !EditorMarkers.available())) {
+			/* no markers (e.g., an editor of the embedding application): report the problems only */
+			JavaRunner.Compiled c = JavaRunner.compile(code);
+			if(c.issues.isEmpty())
+				return c.ok ? "OK: the Java code in " + editors.labelOf(t) + " compiles without errors or warnings." : "Compilation failed without line information:\n" + c.diagnostics;
+			StringBuilder sb = new StringBuilder(c.ok ? "Compiles, with warnings" : "Compilation FAILED").append(" - ").append(c.issues.size()).append(" problem(s) in ").append(editors.labelOf(t)).append(" (markers are not available in this editor):\n");
+			for(EditorMarkers.Issue is : c.issues)
+				sb.append("line ").append(is.line).append(is.column > 0 ? ", column " + is.column : "").append(' ').append(is.severity).append(": ").append(is.message).append('\n');
+			return sb.toString();
+		}
 		if(!EditorMarkers.available())
 			return EditorMarkers.UNAVAILABLE;
-		Editor ed = editors.target();
-		if(ed == null)
-			return "ERROR: no editor is open.";
-		String lang = EditorBridge.languageOf(ed);
-		String code = editors.getText(ed);
 		if(!"java".equals(lang))
 			return "check_code can only compile Java. This editor contains " + languageName(lang) + ": review the code yourself (get_editor_text with line_numbers=true) and mark problems with mark_issues, or use run_editor, which marks runtime errors.";
 		JavaRunner.Compiled c = JavaRunner.compile(code);
@@ -454,7 +477,7 @@ public class ImageJTools {
 	private String setEditorText(String code, String mode, String title) {
 		if(code == null || code.isEmpty())
 			return "ERROR: empty code.";
-		Editor ed = editors.target();
+		CodeTarget ed = editors.target();
 		if("new".equals(mode) || ed == null) {
 			String t = title == null || title.isBlank() ? "LLM_Macro" + EditorBridge.extensionFor(settings.defaultLanguage) : title;
 			if(t.indexOf('.') < 0)
@@ -463,24 +486,24 @@ public class ImageJTools {
 			String cls = JavaRunner.isCompleteClass(code) ? JavaRunner.className(code) : null;
 			if(cls != null && (t.endsWith(".java") || "java".equals(settings.defaultLanguage) && t.startsWith("LLM_Macro")))
 				t = cls + ".java";
-			Editor n = editors.openNew(t, code);
-			String where = editors.isInExplorer(n) ? "Script Explorer tab" : "editor window";
+			CodeTarget n = editors.openNew(t, code);
+			String where = n.imagejEditor() == null ? n.location() + " editor" : editors.isInExplorer(n) ? "Script Explorer tab" : "editor window";
 			host.info("Opened new " + where + " \"" + t + "\"");
 			return "OK: new " + where + " '" + t + "' opened with " + code.split("\n").length + " lines (not saved yet).";
 		}
 		switch(mode) {
 			case "insert":
-				editors.insertAtCaret(ed, code);
+				ed.insertAtCaret(code);
 				host.info("Inserted code into \"" + EditorBridge.titleOf(ed) + "\"");
 				return "OK: inserted into '" + EditorBridge.titleOf(ed) + "'.";
 			case "append":
-				editors.append(ed, code);
+				ed.append(code);
 				host.info("Appended code to \"" + EditorBridge.titleOf(ed) + "\"");
 				return "OK: appended to '" + EditorBridge.titleOf(ed) + "'.";
 			default:
 				if(settings.confirmEditorReplace && !host.confirm("Replace editor content", "The assistant wants to replace the whole content of \"" + EditorBridge.titleOf(ed) + "\".\n\nAllow?"))
 					return "DENIED: the user did not allow replacing the editor content. Offer the code in the chat instead.";
-				editors.replaceAll(ed, code);
+				ed.replaceAll(code);
 				host.info("Replaced content of \"" + EditorBridge.titleOf(ed) + "\"");
 				return "OK: content of '" + EditorBridge.titleOf(ed) + "' replaced.";
 		}
@@ -734,7 +757,7 @@ public class ImageJTools {
 			ed = new Editor(f.getName());
 			ed.open(f.getParent() + File.separator, f.getName());
 		}
-		editors.setSelected(ed);
+		editors.setSelected(editors.wrap(ed));
 		host.info("Opened \"" + f.getName() + "\"" + (editors.isInExplorer(ed) ? " in the Script Explorer" : ""));
 		return "OK: '" + f.getName() + "' opened and is now the target editor (" + editors.labelOf(ed) + ").";
 	}

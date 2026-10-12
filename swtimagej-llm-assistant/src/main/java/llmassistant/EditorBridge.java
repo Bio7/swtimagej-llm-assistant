@@ -48,6 +48,11 @@ import ij.plugin.frame.swt.WindowSwt;
  * Explorer itself uses. Older SWTImageJ versions fall back to standalone
  * editors. All widget access is marshalled onto the SWT display thread, so the
  * methods can be called from any thread.
+ * <p>
+ * In addition, applications that embed SWTImageJ can register their own editors
+ * (ij.swt.CodeEditors, in recent SWTImageJ versions). They are listed after the
+ * SWTImageJ editors, labeled with the application name, and can be selected as
+ * target. New code opens in the application of the current target editor.
  */
 public class EditorBridge {
 
@@ -56,9 +61,11 @@ public class EditorBridge {
 
 	private final LLMSettings settings;
 	/** Explicitly selected target editor (null = automatic). */
-	private volatile Editor selected;
+	private volatile CodeTarget selected;
 	/** Last standalone editor that was ImageJ's active window. */
 	private volatile Editor lastStandalone;
+	/** Application editor opened last for new code (followed until an SWTImageJ editor is used). */
+	private volatile CodeTarget lastExternal;
 	/** Called (on the UI thread) when the Script Explorer's selected tab changes. */
 	private volatile Runnable tabListener;
 
@@ -70,6 +77,41 @@ public class EditorBridge {
 		AtomicReference<T> ref = new AtomicReference<>();
 		Display.getDefault().syncExec(() -> ref.set(s.get()));
 		return ref.get();
+	}
+
+	/* ================================================================ application editors */
+
+	private static Boolean externalAvailable;
+
+	/** True if this SWTImageJ version supports editors of the embedding application (ij.swt.CodeEditors). */
+	public static boolean externalEditorsAvailable() {
+		if(externalAvailable == null) {
+			try {
+				Class.forName("ij.swt.CodeEditors");
+				externalAvailable = Boolean.TRUE;
+			} catch(Throwable t) {
+				externalAvailable = Boolean.FALSE;
+			}
+		}
+		return externalAvailable;
+	}
+
+	/** True if the embedding application has registered editors. */
+	public static boolean hasExternalEditors() {
+		return externalEditorsAvailable() && ExternalTarget.hasProviders();
+	}
+
+	private static List<CodeTarget> externalEditors() {
+		return externalEditorsAvailable() ? ExternalTarget.list() : new ArrayList<>();
+	}
+
+	private static CodeTarget externalActive() {
+		return externalEditorsAvailable() ? ExternalTarget.active() : null;
+	}
+
+	/** Wraps an SWTImageJ editor (null for null). */
+	public CodeTarget wrap(Editor ed) {
+		return ed == null ? null : new ImageJTarget(this, ed);
 	}
 
 	/* ================================================================ Script Explorer */
@@ -160,6 +202,7 @@ public class EditorBridge {
 	}
 
 	private void fireTabChange() {
+		lastExternal = null; // the user works in the Script Explorer
 		Runnable r = tabListener;
 		if(r != null)
 			Display.getDefault().asyncExec(r);
@@ -295,10 +338,19 @@ public class EditorBridge {
 		return list;
 	}
 
-	/** Script Explorer tabs first, then standalone windows. */
-	public List<Editor> listEditors() {
+	/** SWTImageJ editors: Script Explorer tabs first, then standalone windows. */
+	public List<Editor> imagejEditors() {
 		List<Editor> l = explorerEditors();
 		l.addAll(standaloneEditors());
+		return l;
+	}
+
+	/** All editors: the SWTImageJ editors, then the editors of the embedding application. */
+	public List<CodeTarget> listEditors() {
+		List<CodeTarget> l = new ArrayList<>();
+		for(Editor ed : imagejEditors())
+			l.add(wrap(ed));
+		l.addAll(externalEditors());
 		return l;
 	}
 
@@ -329,33 +381,67 @@ public class EditorBridge {
 		}
 	}
 
+	public static String titleOf(CodeTarget t) {
+		return t == null ? "Editor" : t.title();
+	}
+
 	/** Title with location prefix for lists. */
 	public String labelOf(Editor ed) {
 		return (isInExplorer(ed) ? "Explorer: " : "Window: ") + titleOf(ed);
 	}
 
-	public void setSelected(Editor ed) {
-		selected = ed;
+	/** Title with location prefix for lists. */
+	public String labelOf(CodeTarget t) {
+		return t == null ? "Editor" : t.location() + ": " + t.title();
+	}
+
+	public boolean isInExplorer(CodeTarget t) {
+		return t != null && t.imagejEditor() != null && isInExplorer(t.imagejEditor());
+	}
+
+	public void setSelected(CodeTarget t) {
+		selected = t;
 	}
 
 	/** Called whenever a shell is activated, to remember the last standalone editor. */
 	public void noteActiveWindow() {
 		Object w = WindowManager.getActiveWindow();
-		if(w instanceof Editor)
+		if(w instanceof Editor) {
 			lastStandalone = (Editor)w;
-		else if(w != null && w.getClass().getName().equals(EXPLORER_CLASS))
+			lastExternal = null;
+		} else if(w != null && w.getClass().getName().equals(EXPLORER_CLASS)) {
 			lastStandalone = null; // the Script Explorer was used last
+			lastExternal = null;
+		}
 	}
 
 	/**
 	 * Resolves the editor to work with: explicit selection, then (by default) the
-	 * Script Explorer's selected tab, then the last active standalone editor or
-	 * other open editors.
+	 * Script Explorer's selected tab, then the last active standalone editor, then
+	 * the active editor of the embedding application, then other open editors.
 	 */
-	public Editor target() {
-		List<Editor> open = listEditors();
-		if(selected != null && open.contains(selected))
+	public CodeTarget target() {
+		if(selected != null && listEditors().contains(selected))
 			return selected;
+		CodeTarget last = lastExternal;
+		if(last != null) {
+			if(last.isOpen())
+				return last;
+			lastExternal = null;
+		}
+		Editor ed = imagejTarget();
+		if(ed != null)
+			return wrap(ed);
+		CodeTarget ext = externalActive();
+		if(ext != null)
+			return ext;
+		List<CodeTarget> open = listEditors();
+		return open.isEmpty() ? null : open.get(open.size() - 1);
+	}
+
+	/** The SWTImageJ editor to work with automatically, or null. */
+	private Editor imagejTarget() {
+		List<Editor> open = imagejEditors();
 		Editor exActive = useExplorer() ? explorerActiveEditor() : null;
 		if(exActive != null)
 			return exActive;
@@ -374,7 +460,7 @@ public class EditorBridge {
 			if(ea != null)
 				return ea;
 		}
-		return open.isEmpty() ? null : open.get(open.size() - 1);
+		return null;
 	}
 
 	/* ================================================================ text access */
@@ -451,16 +537,27 @@ public class EditorBridge {
 	 * explorer is unavailable) in a standalone editor window. The extension of the
 	 * title (.ijm, .js, .bsh, .py, .java) selects the language support.
 	 */
-	public Editor openNew(String title, String text) {
+	public CodeTarget openNew(String title, String text) {
+		/* new code opens in the application of the current target editor */
+		CodeTarget current = target();
+		if(current != null && current.imagejEditor() == null && externalEditorsAvailable()) {
+			CodeTarget t = ExternalTarget.openNew(current, title, text);
+			if(t != null) {
+				selected = null; // follow the new editor automatically
+				lastExternal = t;
+				return t;
+			}
+		}
 		Editor ed = useExplorer() ? openInExplorer(title, text) : null;
 		if(ed == null) {
 			ed = new Editor(title);
 			ed.create(title, text);
 		}
 		selected = null; // follow the new tab / window automatically
+		lastExternal = null;
 		if(!isInExplorer(ed))
 			lastStandalone = ed;
-		return ed;
+		return wrap(ed);
 	}
 
 	public static String extensionFor(String language) {
@@ -479,9 +576,17 @@ public class EditorBridge {
 				return ".py";
 			case "java":
 				return ".java";
+			case "r":
+				return ".R";
+			case "groovy":
+				return ".groovy";
 			default:
 				return ".ijm";
 		}
+	}
+
+	public static String languageOf(CodeTarget t) {
+		return t == null ? "ijm" : t.language();
 	}
 
 	/** Guesses the script language from an editor title. */
