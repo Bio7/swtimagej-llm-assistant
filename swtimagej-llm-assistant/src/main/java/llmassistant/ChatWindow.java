@@ -399,20 +399,19 @@ public class ChatWindow implements ImageJTools.Host {
 	}
 
 	/** Runs a marker action on a background thread for the target editor, reporting problems in the transcript. */
-	private void markerAction(java.util.function.Function<Editor, String> action) {
+	private void markerAction(java.util.function.Function<MarkerHost, String> action) {
 		new Thread(() -> {
-			if(!EditorMarkers.available()) {
-				error(EditorMarkers.UNAVAILABLE + "\nReason: " + EditorMarkers.unavailableReason());
-				return;
-			}
 			CodeTarget target = editors.target();
 			if(target == null) {
 				info("No editor is open (open a macro or Java file in the Script Explorer or an editor window).");
 				return;
 			}
-			Editor ed = target.imagejEditor();
+			MarkerHost ed = target.markerHost();
 			if(ed == null) {
-				info("Markers and quick fixes are only available in SWTImageJ editors, not in " + editors.labelOf(target) + ".");
+				if(target.imagejEditor() != null)
+					error(EditorMarkers.UNAVAILABLE + "\nReason: " + EditorMarkers.unavailableReason());
+				else
+					info("Markers and quick fixes are not available in " + editors.labelOf(target) + " (not supported by the application or this SWTImageJ version).");
 				return;
 			}
 			try {
@@ -431,23 +430,23 @@ public class ChatWindow implements ImageJTools.Host {
 	private void clearMarkers() {
 		markerAction(ed -> {
 			EditorMarkers.clear(ed);
-			return "Markers removed from " + editors.labelOf(ed);
+			return "Markers removed from " + editors.labelOf(ed.target);
 		});
 	}
 
 	private void testMarkers() {
-		markerAction(ed -> "Test in " + editors.labelOf(ed) + ": " + EditorMarkers.selfTest(ed));
+		markerAction(ed -> "Test in " + editors.labelOf(ed.target) + ": " + EditorMarkers.selfTest(ed));
 	}
 
 	/** Direct action: compiles the target Java editor and marks the errors (no model call). */
 	private void checkNow() {
 		markerAction(ed -> {
-			if(!"java".equals(EditorBridge.languageOf(ed)))
-				return editors.labelOf(ed) + " is not a .java file. Macros can only be checked by running them, or use \"Find errors & add quick fixes\".";
-			JavaRunner.Compiled c = JavaRunner.compile(editors.getText(ed));
+			if(!"java".equals(ed.target.language()))
+				return editors.labelOf(ed.target) + " is not a .java file. Macros can only be checked by running them, or use \"Find errors & add quick fixes\".";
+			JavaRunner.Compiled c = JavaRunner.compile(ed.target.text());
 			EditorMarkers.clear(ed);
 			if(c.issues.isEmpty())
-				return c.ok ? editors.labelOf(ed) + " compiles without problems." : "Compilation failed without line information:\n" + c.diagnostics;
+				return c.ok ? editors.labelOf(ed.target) + " compiles without problems." : "Compilation failed without line information:\n" + c.diagnostics;
 			return EditorMarkers.mark(ed, c.issues, false);
 		});
 	}
@@ -483,7 +482,7 @@ public class ChatWindow implements ImageJTools.Host {
 	private void runQuick(String prompt, boolean snapshot) {
 		if(busy.get())
 			return;
-		if(prompt.equals(P_FIND) && !EditorMarkers.available()) {
+		if(prompt.equals(P_FIND) && !EditorMarkers.anyAvailable()) {
 			error(EditorMarkers.UNAVAILABLE + "\nReason: " + EditorMarkers.unavailableReason());
 			return;
 		}
@@ -520,7 +519,7 @@ public class ChatWindow implements ImageJTools.Host {
 		String where = editors.useExplorer() ? "the selected Script Explorer tab (new code opens in new tabs)" : "the selected editor";
 		appendLine("The assistant can inspect the active image, read and write " + where + ", browse the scripts in the plugins/macros folders, look up menu commands and run macros" + (settings.confirmRun ? " (after your approval)." : "."), null, dimFg, null);
 		appendLine("Documents: " + (settings.useBuiltinReference || !settings.documents.isEmpty() ? (KnowledgeBase.get().chunkCount() > 0 ? KnowledgeBase.get().summary() : "indexing in the background ...") : "none - add some with Documents...") + "", null, dimFg, null);
-		if(EditorMarkers.available())
+		if(EditorMarkers.anyAvailable())
 			appendLine("Editor markers: available" + (settings.markErrors ? "" : " (automatic error markers are off in General Preferences)") + " - Quick actions \u25be > Markers & quick fixes.", null, dimFg, null);
 		else
 			appendLine("Editor markers: NOT available in this SWTImageJ build (" + EditorMarkers.unavailableReason() + "). Update SWTImageJ to use markers and quick fixes.", null, errorFg, null);
@@ -940,7 +939,7 @@ public class ChatWindow implements ImageJTools.Host {
 			if(editors.useExplorer())
 				sb.append("SWTImageJ's Script Explorer is the user's main workspace: a file tree of the plugins and macros folders with one editor tab per file. The target editor is its selected tab, and set_editor_text mode 'new' opens a new tab. Reuse or adapt existing scripts from these folders when they fit. ");
 			if(EditorBridge.hasExternalEditors())
-				sb.append("Editors of the application that embeds SWTImageJ are listed with the application name as prefix (e.g. in get_imagej_context). If such an editor is the target, the editor tools read and write it, and set_editor_text mode 'new' opens new code in that application. Markers and quick fixes only work in SWTImageJ editors, and run_editor only runs languages SWTImageJ supports. ");
+				sb.append("Editors of the application that embeds SWTImageJ are listed with the application name as prefix (e.g. in get_imagej_context). If such an editor is the target, the editor tools read and write it, and set_editor_text mode 'new' opens new code in that application. Markers and quick fixes work in SWTImageJ editors and in application editors listed with [markers], and run_editor only runs languages SWTImageJ supports. ");
 			sb.append("Inspect the image or editor instead of guessing. When the user asks to create or change a macro, write it into the editor with set_editor_text (mode 'new' for a new file, 'replace' to change the existing one). ");
 			sb.append("You can open images (open_image: file path, URL or sample name from list_sample_images) and switch the active image (select_image). ");
 			if(settings.enableVision)
@@ -949,8 +948,8 @@ public class ChatWindow implements ImageJTools.Host {
 		} else {
 			sb.append("- You cannot call tools; the user's messages may contain attached image info and editor code.\n");
 		}
-		if(settings.enableTools && EditorMarkers.available()) {
-			sb.append("- Editor markers: the SWTImageJ editor shows error/warning/info markers (squiggly underline + ruler dot, message on hover) with optional quick fixes that the user applies by double-clicking. ");
+		if(settings.enableTools && EditorMarkers.anyAvailable()) {
+			sb.append("- Editor markers: the editor shows error/warning/info markers (squiggly underline + ruler dot, message on hover) with optional quick fixes that the user applies by double-clicking. ");
 			sb.append("When asked to find, check or explain errors in the editor code, mark them with mark_issues (after get_editor_text with line_numbers=true; for Java run check_code first) and give each fixable problem a 'replacement' with the corrected text of the marked range - prefer a small exact 'match' over whole lines. ");
 			sb.append("run_editor and check_code mark compiler/runtime errors automatically; turn them into quick fixes with mark_issues. Only use apply_quick_fixes or set_editor_text for fixes when the user explicitly asks you to change the code.\n");
 		}

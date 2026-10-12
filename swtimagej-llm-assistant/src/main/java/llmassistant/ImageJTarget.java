@@ -81,6 +81,11 @@ final class ImageJTarget extends CodeTarget {
 	}
 
 	@Override
+	MarkerHost markerHost() {
+		return EditorMarkers.available() ? new ImageJMarkerHost(this, editor) : null;
+	}
+
+	@Override
 	public boolean equals(Object o) {
 		return o instanceof ImageJTarget && ((ImageJTarget)o).editor == editor;
 	}

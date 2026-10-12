@@ -152,7 +152,7 @@ public class PreferencesDialog {
 		Group beh = group("SWTImageJ integration", 1);
 		useExplorer = check(beh, "Use the Script Explorer by default (read the selected tab, open new code in new tabs; opened when needed)", s.useScriptExplorer);
 		markErrors = check(beh, "Show errors from runs and checks as markers in the editor (quick fixes by double-click)", s.markErrors);
-		if(!EditorMarkers.available()) {
+		if(!EditorMarkers.anyAvailable()) {
 			markErrors.setEnabled(false);
 			markErrors.setToolTipText(EditorMarkers.UNAVAILABLE);
 		}

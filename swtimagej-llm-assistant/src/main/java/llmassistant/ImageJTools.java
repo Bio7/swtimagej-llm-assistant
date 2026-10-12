@@ -128,7 +128,7 @@ public class ImageJTools {
 		t.add(fn("select_image", "Makes the open image with the given title the active image.", Json.obj("title", p("string", "Image title.")), "title"));
 		t.add(fn("get_editor_text", "Returns the full text and title (language by extension) of the target editor - by default the selected Script Explorer tab - plus the currently selected text and the markers the assistant placed.",
 				Json.obj("line_numbers", p("boolean", "Prefix every line with its 1-based number (use this before mark_issues). Never copy these prefixes into code."))));
-		if(EditorMarkers.available()) {
+		if(EditorMarkers.anyAvailable()) {
 			Map<String, Object> issue = Json.obj("type", "object", "properties", Json.obj(
 					"line", p("integer", "1-based line of the problem."),
 					"end_line", p("integer", "Optional last line when the marker (and its replacement) spans several whole lines."),
@@ -201,13 +201,13 @@ public class ImageJTools {
 					CodeTarget t = editors.target();
 					if(t == null)
 						return "ERROR: no editor is open.";
-					Editor ed = t.imagejEditor();
+					MarkerHost ed = t.markerHost();
 					if(ed == null)
-						return "ERROR: markers and quick fixes are only available in SWTImageJ editors, not in " + editors.labelOf(t) + ".";
+						return noMarkers(t);
 					int n = EditorMarkers.pendingFixes(ed);
 					if(n == 0)
-						return "No pending quick fixes from the assistant in " + editors.labelOf(ed) + ".";
-					if(settings.confirmEditorReplace && !host.confirm("Apply quick fixes", "The assistant wants to apply " + n + " quick fix(es) in " + editors.labelOf(ed) + ".\n\nAllow?"))
+						return "No pending quick fixes from the assistant in " + editors.labelOf(t) + ".";
+					if(settings.confirmEditorReplace && !host.confirm("Apply quick fixes", "The assistant wants to apply " + n + " quick fix(es) in " + editors.labelOf(t) + ".\n\nAllow?"))
 						return "DENIED: the user did not allow applying the fixes; they can double-click single markers instead.";
 					String r = EditorMarkers.applyAll(ed);
 					host.info(r.split("\n", 2)[0]);
@@ -217,11 +217,11 @@ public class ImageJTools {
 					CodeTarget t = editors.target();
 					if(t == null)
 						return "ERROR: no editor is open.";
-					Editor ed = t.imagejEditor();
+					MarkerHost ed = t.markerHost();
 					if(ed == null)
-						return "ERROR: markers and quick fixes are only available in SWTImageJ editors, not in " + editors.labelOf(t) + ".";
+						return noMarkers(t);
 					EditorMarkers.clear(ed);
-					return "OK: markers removed from " + editors.labelOf(ed) + ".";
+					return "OK: markers removed from " + editors.labelOf(t) + ".";
 				}
 				case "set_editor_text":
 					return setEditorText(Json.str(args, "code", ""), Json.str(args, "mode", "replace"), Json.str(args, "title", null));
@@ -231,7 +231,7 @@ public class ImageJTools {
 					CodeTarget t = editors.target();
 					if(t == null)
 						return "ERROR: no editor is open.";
-					return runWithApproval(t.text(), t.language(), "The assistant wants to run the editor '" + t.title() + "'", t.imagejEditor());
+					return runWithApproval(t.text(), t.language(), "The assistant wants to run the editor '" + t.title() + "'", t.markerHost());
 				}
 				case "save_java_plugin": {
 					String code = Json.str(args, "code", "");
@@ -333,7 +333,7 @@ public class ImageJTools {
 		sb.append("Script Explorer: ").append(!EditorBridge.explorerAvailable() ? "not available in this version" : explorerOpen ? "open" : "closed").append(editors.useExplorer() ? " (default place for code)" : "").append('\n');
 		sb.append("Open editors (").append(eds.size()).append("): ");
 		for(CodeTarget e : eds)
-			sb.append(editors.labelOf(e)).append(e.equals(target) ? " [target]" : "").append(" | ");
+			sb.append(editors.labelOf(e)).append(e.equals(target) ? " [target]" : "").append(e.imagejEditor() == null && e.markerHost() != null ? " [markers]" : "").append(" | ");
 		sb.append('\n');
 		ResultsTable rt = ResultsTable.getResultsTable();
 		if(rt != null && rt.size() > 0)
@@ -388,8 +388,8 @@ public class ImageJTools {
 			text = "";
 		if(lineNumbers)
 			text = numbered(text);
-		Editor ed = t.imagejEditor();
-		return "Editor: " + editors.labelOf(t) + " (language: " + t.language() + ")\n" + (sel.isEmpty() ? "" : "Selected text:\n" + clip(sel, 4000) + "\n") + (ed != null && EditorMarkers.available() ? EditorMarkers.describe(ed) : "") + "----- editor content" + (lineNumbers ? " (with line numbers)" : "") + " -----\n" + clip(text, 40000);
+		MarkerHost ed = t.markerHost();
+		return "Editor: " + editors.labelOf(t) + " (language: " + t.language() + ")\n" + (sel.isEmpty() ? "" : "Selected text:\n" + clip(sel, 4000) + "\n") + (ed != null ? EditorMarkers.describe(ed) : "") + "----- editor content" + (lineNumbers ? " (with line numbers)" : "") + " -----\n" + clip(text, 40000);
 	}
 
 	private static String numbered(String text) {
@@ -403,15 +403,20 @@ public class ImageJTools {
 
 	/* ================================================================ markers and quick fixes */
 
-	private String markIssues(Map<String, Object> args) {
-		if(!EditorMarkers.available())
+	/** The error for an editor without markers. */
+	private String noMarkers(CodeTarget t) {
+		if(t.imagejEditor() != null)
 			return EditorMarkers.UNAVAILABLE;
+		return "ERROR: markers and quick fixes are not available in " + editors.labelOf(t) + " (the application does not support them in this editor, or this SWTImageJ version has no marker API for application editors).";
+	}
+
+	private String markIssues(Map<String, Object> args) {
 		CodeTarget t = editors.target();
 		if(t == null)
 			return "ERROR: no editor is open.";
-		Editor ed = t.imagejEditor();
+		MarkerHost ed = t.markerHost();
 		if(ed == null)
-			return "ERROR: markers and quick fixes are only available in SWTImageJ editors, not in " + editors.labelOf(t) + ".";
+			return noMarkers(t);
 		List<Object> raw = Json.asList(args.get("issues"));
 		if(raw == null || raw.isEmpty())
 			return "ERROR: 'issues' must be a non-empty array.";
@@ -441,8 +446,8 @@ public class ImageJTools {
 			return "ERROR: no editor is open.";
 		String lang = t.language();
 		String code = t.text();
-		Editor ed = t.imagejEditor();
-		if("java".equals(lang) && (ed == null || !EditorMarkers.available())) {
+		MarkerHost ed = t.markerHost();
+		if("java".equals(lang) && ed == null) {
 			/* no markers (e.g., an editor of the embedding application): report the problems only */
 			JavaRunner.Compiled c = JavaRunner.compile(code);
 			if(c.issues.isEmpty())
@@ -452,8 +457,8 @@ public class ImageJTools {
 				sb.append("line ").append(is.line).append(is.column > 0 ? ", column " + is.column : "").append(' ').append(is.severity).append(": ").append(is.message).append('\n');
 			return sb.toString();
 		}
-		if(!EditorMarkers.available())
-			return EditorMarkers.UNAVAILABLE;
+		if(ed == null)
+			return noMarkers(t);
 		if(!"java".equals(lang))
 			return "check_code can only compile Java. This editor contains " + languageName(lang) + ": review the code yourself (get_editor_text with line_numbers=true) and mark problems with mark_issues, or use run_editor, which marks runtime errors.";
 		JavaRunner.Compiled c = JavaRunner.compile(code);
@@ -463,7 +468,7 @@ public class ImageJTools {
 		EditorMarkers.mark(ed, c.issues, false);
 		host.markersChanged();
 		String[] lines = code.split("\n", -1);
-		StringBuilder sb = new StringBuilder(c.ok ? "Compiles, with warnings" : "Compilation FAILED").append(" - ").append(c.issues.size()).append(" problem(s), marked in ").append(editors.labelOf(ed)).append(":\n");
+		StringBuilder sb = new StringBuilder(c.ok ? "Compiles, with warnings" : "Compilation FAILED").append(" - ").append(c.issues.size()).append(" problem(s), marked in ").append(editors.labelOf(t)).append(":\n");
 		for(EditorMarkers.Issue is : c.issues) {
 			sb.append("line ").append(is.line).append(is.column > 0 ? ", column " + is.column : "").append(' ').append(is.severity).append(": ").append(is.message).append('\n');
 			if(is.line >= 1 && is.line <= lines.length)
@@ -952,7 +957,7 @@ public class ImageJTools {
 	}
 
 	/** markIn != null: errors are shown as markers in this editor (fresh pass: old markers are cleared). */
-	private String runWithApproval(String code, String language, String question, Editor markIn) {
+	private String runWithApproval(String code, String language, String question, MarkerHost markIn) {
 		if(code == null || code.isBlank())
 			return "ERROR: nothing to run.";
 		if(settings.confirmRun) {
@@ -961,7 +966,7 @@ public class ImageJTools {
 				return "DENIED: the user did not allow running this code.";
 		}
 		host.info("Running " + languageName(language) + " ...");
-		if(markIn == null || !settings.markErrors || !EditorMarkers.available())
+		if(markIn == null || !settings.markErrors)
 			return runCode(code, language);
 		List<EditorMarkers.Issue> issues = new ArrayList<>();
 		String report = runCode(code, language, issues);
@@ -969,13 +974,12 @@ public class ImageJTools {
 	}
 
 	/** Replaces the editor's markers with the given issues; returns a note for the model. */
-	// (called only when EditorMarkers.available())
-	private String markReport(Editor ed, List<EditorMarkers.Issue> issues) {
+	private String markReport(MarkerHost ed, List<EditorMarkers.Issue> issues) {
 		EditorMarkers.clear(ed);
 		if(issues.isEmpty())
 			return "";
 		String r = EditorMarkers.mark(ed, issues, false);
-		host.info("Marked " + issues.size() + " problem(s) in " + editors.labelOf(ed));
+		host.info("Marked " + issues.size() + " problem(s) in " + editors.labelOf(ed.target));
 		return "\nEditor markers: " + r.split("\n", 2)[0] + " Use mark_issues to add quick fixes for them.";
 	}
 

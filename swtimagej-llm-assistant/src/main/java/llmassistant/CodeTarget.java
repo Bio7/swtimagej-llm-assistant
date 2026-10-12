@@ -49,8 +49,13 @@ abstract class CodeTarget {
 
 	abstract boolean isOpen();
 
-	/** The SWTImageJ editor (required for markers and quick fixes) or null. */
+	/** The SWTImageJ editor or null. */
 	Editor imagejEditor() {
+		return null;
+	}
+
+	/** The editor for markers and quick fixes, or null if the editor does not support them. */
+	MarkerHost markerHost() {
 		return null;
 	}
 

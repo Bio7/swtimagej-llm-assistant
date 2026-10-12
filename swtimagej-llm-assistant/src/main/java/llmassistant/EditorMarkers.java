@@ -19,18 +19,20 @@ package llmassistant;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
-import java.util.WeakHashMap;
 
 import ij.plugin.frame.Editor;
 
 /**
- * Error/warning/info markers with optional quick fixes in the SWTImageJ editor
- * (Editor.addMarker / Editor.QuickFix / applyQuickFix, recent SWTImageJ).
- * Markers are addressed by 1-based line and optionally by an exact text on
- * that line; the plugin remembers the markers it placed so their fixes can be
- * listed and applied together.
+ * Error/warning/info markers with optional quick fixes in an editor (see
+ * {@link MarkerHost}): the SWTImageJ editor (Editor.addMarker / Editor.QuickFix
+ * / applyQuickFix, recent SWTImageJ) or an editor of the embedding application
+ * with the ij.swt.CodeEditor marker API. Markers are addressed by 1-based line
+ * and optionally by an exact text on that line; the plugin remembers the
+ * markers it placed so their fixes can be listed and applied together.
  */
 public final class EditorMarkers {
 
@@ -63,17 +65,30 @@ public final class EditorMarkers {
 
 		int start, end;
 		Issue issue;
-		Object fix;
+		Object fix; // the handle of the marker (see MarkerHost.add)
+		boolean hasFix;
+	}
+
+	/** The markers placed in one editor. */
+	private static final class Entry {
+
+		final MarkerHost host;
+		final List<Placed> list = Collections.synchronizedList(new ArrayList<>());
+
+		Entry(MarkerHost host) {
+			this.host = host;
+		}
 	}
 
 	private static Boolean available;
 	private static String unavailableReason = "";
-	private static final Map<Editor, List<Placed>> placed = Collections.synchronizedMap(new WeakHashMap<>());
+	/* keyed by MarkerHost.key(); entries of closed editors are removed when markers are placed */
+	private static final Map<Object, Entry> placed = Collections.synchronizedMap(new HashMap<>());
 
 	private EditorMarkers() {
 	}
 
-	/** True if this SWTImageJ version has the marker / quick fix API. */
+	/** True if this SWTImageJ version has the marker / quick fix API of the SWTImageJ editor. */
 	public static synchronized boolean available() {
 		if(available == null) {
 			try {
@@ -91,6 +106,11 @@ public final class EditorMarkers {
 		return available;
 	}
 
+	/** True if markers can be used in SWTImageJ editors or in editors of the embedding application. */
+	public static boolean anyAvailable() {
+		return available() || EditorBridge.externalEditorsAvailable() && ExternalTarget.markersApiPresent();
+	}
+
 	/** Why the API is missing (e.g. the missing method), empty if available. */
 	public static String unavailableReason() {
 		available();
@@ -101,10 +121,8 @@ public final class EditorMarkers {
 	 * Places an info marker with a no-op quick fix on the first non-empty line, so
 	 * the user can verify that markers are displayed (double-click removes it).
 	 */
-	public static String selfTest(Editor ed) {
-		if(!available())
-			return UNAVAILABLE + " (" + unavailableReason + ")";
-		String text = ed.getText();
+	public static String selfTest(MarkerHost ed) {
+		String text = ed.target.text();
 		String[] lines = text == null ? new String[0] : text.split("\n", -1);
 		int n = 0;
 		while(n < lines.length && lines[n].strip().isEmpty())
@@ -150,19 +168,18 @@ public final class EditorMarkers {
 	 *
 	 * @return a report line per issue ("OK line 3: ..." or "SKIPPED ...")
 	 */
-	public static String mark(Editor ed, List<Issue> issues, boolean clearFirst) {
-		if(!available())
-			return UNAVAILABLE;
+	public static String mark(MarkerHost ed, List<Issue> issues, boolean clearFirst) {
 		if(clearFirst)
 			clear(ed);
-		String text = ed.getText();
+		prune();
+		String text = ed.target.text();
 		if(text == null)
 			return "ERROR: editor has no text.";
 		int[] starts = lineStarts(text);
 		int lines = starts.length - 1;
 		StringBuilder sb = new StringBuilder();
 		int ok = 0, fixes = 0;
-		List<Placed> list = placed.computeIfAbsent(ed, _ -> Collections.synchronizedList(new ArrayList<>()));
+		List<Placed> list = placed.computeIfAbsent(ed.key(), _ -> new Entry(ed)).list;
 		for(Issue is : issues) {
 			if(is.line < 1 || is.line > lines) {
 				sb.append("SKIPPED: line ").append(is.line).append(" does not exist (editor has ").append(lines).append(" lines): ").append(is.message).append('\n');
@@ -208,38 +225,51 @@ public final class EditorMarkers {
 				p.start = start;
 				p.end = end;
 				p.issue = is;
-				p.fix = MarkerSupport.add(ed, start, end, is.severity, is.message, is.fixDescription, is.replacement);
+				p.fix = ed.add(start, end, is.severity, is.message, is.fixDescription, is.replacement);
+				p.hasFix = is.replacement != null;
 				list.add(p);
 				ok++;
-				if(p.fix != null)
+				if(p.hasFix)
 					fixes++;
-				sb.append("OK line ").append(is.line).append(is.match != null ? " \"" + is.match + "\"" : endLine > is.line ? "-" + endLine : "").append(": ").append(is.severity).append(" - ").append(is.message).append(p.fix != null ? " [quick fix]" : "").append('\n');
+				sb.append("OK line ").append(is.line).append(is.match != null ? " \"" + is.match + "\"" : endLine > is.line ? "-" + endLine : "").append(": ").append(is.severity).append(" - ").append(is.message).append(p.hasFix ? " [quick fix]" : "").append('\n');
 			} catch(Throwable t) {
 				sb.append("FAILED line ").append(is.line).append(": ").append(t).append('\n');
 			}
 		}
-		sb.insert(0, "Placed " + ok + " marker(s) in '" + EditorBridge.titleOf(ed) + "', " + fixes + " with quick fix (the user applies a fix by double-clicking the marked text).\n");
+		sb.insert(0, "Placed " + ok + " marker(s) in '" + EditorBridge.titleOf(ed.target) + "', " + fixes + " with quick fix (the user applies a fix by double-clicking the marked text).\n");
 		return sb.toString().strip();
 	}
 
-	public static void clear(Editor ed) {
-		if(!available() || ed == null)
+	public static void clear(MarkerHost ed) {
+		if(ed == null)
 			return;
-		MarkerSupport.clear(ed);
-		placed.remove(ed);
+		ed.clear();
+		placed.remove(ed.key());
+	}
+
+	/* Forgets the markers of closed editors. */
+	private static void prune() {
+		synchronized(placed) {
+			for(Iterator<Entry> it = placed.values().iterator(); it.hasNext();)
+				if(!it.next().host.target.isOpen())
+					it.remove();
+		}
+	}
+
+	private static List<Placed> placedIn(MarkerHost ed) {
+		Entry e = ed == null ? null : placed.get(ed.key());
+		return e == null ? null : e.list;
 	}
 
 	/** Number of quick fixes placed by the plugin that are still applicable. */
-	public static int pendingFixes(Editor ed) {
-		if(!available() || ed == null)
-			return 0;
-		List<Placed> list = placed.get(ed);
+	public static int pendingFixes(MarkerHost ed) {
+		List<Placed> list = placedIn(ed);
 		if(list == null)
 			return 0;
 		int n = 0;
 		synchronized(list) {
 			for(Placed p : list)
-				if(MarkerSupport.pending(ed, p.start, p.end, p.fix))
+				if(p.hasFix && ed.pending(p.start, p.end, p.fix))
 					n++;
 		}
 		return n;
@@ -250,12 +280,10 @@ public final class EditorMarkers {
 	 * the start, so earlier offsets stay valid. Fixes whose marker has moved or
 	 * disappeared (e.g. text edited meanwhile) are skipped.
 	 */
-	public static String applyAll(Editor ed) {
-		if(!available())
-			return UNAVAILABLE;
-		List<Placed> list = placed.get(ed);
+	public static String applyAll(MarkerHost ed) {
+		List<Placed> list = placedIn(ed);
 		if(list == null || list.isEmpty())
-			return "No quick fixes from the assistant in '" + EditorBridge.titleOf(ed) + "'.";
+			return "No quick fixes from the assistant in '" + EditorBridge.titleOf(ed.target) + "'.";
 		List<Placed> copy;
 		synchronized(list) {
 			copy = new ArrayList<>(list);
@@ -264,9 +292,9 @@ public final class EditorMarkers {
 		int applied = 0, skipped = 0;
 		StringBuilder sb = new StringBuilder();
 		for(Placed p : copy) {
-			if(p.fix == null)
+			if(!p.hasFix)
 				continue;
-			if(MarkerSupport.apply(ed, p.start, p.end, p.fix)) {
+			if(ed.apply(p.start, p.end, p.fix)) {
 				applied++;
 				list.remove(p);
 				sb.append("applied line ").append(p.issue.line).append(": ").append(p.issue.fixDescription == null ? p.issue.message : p.issue.fixDescription).append('\n');
@@ -278,14 +306,14 @@ public final class EditorMarkers {
 	}
 
 	/** Short list of the markers the plugin placed (for the model). */
-	public static String describe(Editor ed) {
-		List<Placed> list = placed.get(ed);
+	public static String describe(MarkerHost ed) {
+		List<Placed> list = placedIn(ed);
 		if(list == null || list.isEmpty())
 			return "";
 		StringBuilder sb = new StringBuilder("Markers placed by the assistant:\n");
 		synchronized(list) {
 			for(Placed p : list)
-				sb.append("- line ").append(p.issue.line).append(' ').append(p.issue.severity).append(": ").append(p.issue.message).append(p.fix == null ? "" : MarkerSupport.pending(ed, p.start, p.end, p.fix) ? " [quick fix pending]" : " [fix applied or outdated]").append('\n');
+				sb.append("- line ").append(p.issue.line).append(' ').append(p.issue.severity).append(": ").append(p.issue.message).append(!p.hasFix ? "" : ed.pending(p.start, p.end, p.fix) ? " [quick fix pending]" : " [fix applied or outdated]").append('\n');
 		}
 		return sb.toString();
 	}

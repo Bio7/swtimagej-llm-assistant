@@ -42,6 +42,26 @@ final class ExternalTarget extends CodeTarget {
 		this.editor = editor;
 	}
 
+	private static Boolean markersApi;
+
+	/** True if this SWTImageJ version has the marker API of ij.swt.CodeEditor. */
+	static synchronized boolean markersApiPresent() {
+		if(markersApi == null) {
+			try {
+				Class<?> m = Class.forName("ij.swt.CodeMarker");
+				CodeEditor.class.getMethod("supportsMarkers");
+				CodeEditor.class.getMethod("addMarker", m);
+				CodeEditor.class.getMethod("applyQuickFix", m);
+				CodeEditor.class.getMethod("hasMarker", m);
+				CodeEditor.class.getMethod("clearMarkers");
+				markersApi = true;
+			} catch(Throwable t) {
+				markersApi = false;
+			}
+		}
+		return markersApi;
+	}
+
 	static boolean hasProviders() {
 		return !CodeEditors.getProviders().isEmpty();
 	}
@@ -157,6 +177,15 @@ final class ExternalTarget extends CodeTarget {
 			return editor.isOpen();
 		} catch(Throwable t) {
 			return false;
+		}
+	}
+
+	@Override
+	MarkerHost markerHost() {
+		try {
+			return markersApiPresent() && editor.supportsMarkers() ? new ExternalMarkerHost(this, editor) : null;
+		} catch(Throwable t) {
+			return null;
 		}
 	}
 
