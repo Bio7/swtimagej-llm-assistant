@@ -8,7 +8,7 @@ direct source browsing/search of selected reference folders (e.g. an
 ImageJ/SWTImageJ source checkout).
 
 * **Build and Eclipse import:** see [BUILDING.md](BUILDING.md)
-* **Using the plugin:** see [docs/PLUGIN_README.md](docs/PLUGIN_README.md)
+* **Using the plugin:** see the [reference card (PDF)](docs/LLM_Assistant_Reference_Card.pdf)
 
 Quick start: copy the SWTImageJ bundle jar to `lib/org.eclipse.swt.imagej.jar`,
 then `mvn clean package` → `target/LLM_Assistant.jar` → SWTImageJ `plugins` folder.
